@@ -19,61 +19,59 @@
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             width: 100%;
-            max-width: 900px;
+            max-width: 1000px;
+            /* Increased width for table */
             margin: 0 auto;
         }
 
-        h1 {
+        h1,
+        h2 {
             text-align: center;
             color: #444;
         }
 
-        .session-group {
-            border: 1px solid #eee;
-            padding: 15px;
-            margin-top: 15px;
-            border-radius: 4px;
+        h2 {
+            font-size: 1.2rem;
+            margin-top: 20px;
+            margin-bottom: 15px;
+            text-align: left;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 5px;
+        }
+
+        /* --- Entry Section Styles --- */
+        .entry-section {
             background-color: #fafafa;
+            padding: 20px;
+            border-radius: 6px;
+            border: 1px solid #eee;
         }
 
-        .session-header {
+        .form-row {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
+            gap: 20px;
+            margin-bottom: 15px;
+            align-items: flex-start;
         }
 
-        button {
-            cursor: pointer;
-            padding: 8px 16px;
+        .form-group {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .form-group input,
+        .form-group select {
+            padding: 8px;
+            border: 1px solid #ccc;
             border-radius: 4px;
-            border: none;
             font-size: 14px;
-        }
-
-        .add-btn {
-            background-color: #66bb6a;
-            color: white;
-            margin-top: 20px;
-            display: block;
-            width: 100%;
-            font-size: 16px;
-            padding: 12px;
-        }
-
-        .submit-btn {
-            background-color: #5c6bc0;
-            color: white;
-            margin-top: 20px;
-            display: block;
-            width: 100%;
-            font-size: 16px;
-            padding: 12px;
-        }
-
-        .remove-btn {
-            background-color: #ef5350;
-            color: white;
         }
 
         .supervisor-list {
@@ -82,10 +80,10 @@
             border: 1px solid #ddd;
             padding: 10px;
             background: white;
-            margin-top: 5px;
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
             gap: 5px;
+            border-radius: 4px;
         }
 
         .supervisor-item {
@@ -93,6 +91,88 @@
             display: flex;
             align-items: center;
             gap: 5px;
+            user-select: none;
+        }
+
+        /* --- Button Styles --- */
+        button {
+            cursor: pointer;
+            padding: 10px 20px;
+            border-radius: 4px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .add-btn {
+            background-color: #66bb6a;
+            color: white;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .submit-btn {
+            background-color: #5c6bc0;
+            color: white;
+            margin-top: 30px;
+            display: block;
+            width: 100%;
+            font-size: 16px;
+            padding: 15px;
+        }
+
+        .remove-btn {
+            background-color: #ef5350;
+            color: white;
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+
+        /* --- Table Styles --- */
+        .table-container {
+            margin-top: 10px;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95rem;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 12px 15px;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background-color: #f8f9fa;
+            color: #555;
+            font-weight: 600;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            font-style: italic;
+            padding: 20px;
+        }
+
+        .unavailable-cell {
+            font-size: 0.85rem;
+            color: #666;
+            max-width: 300px;
         }
     </style>
 </head>
@@ -101,89 +181,190 @@
 
     <div class="container">
         <h1>Configure Sessions</h1>
-        <form action="/generate" method="POST">
+
+        <!-- Entry Form Section -->
+        <div class="entry-section">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="input-day">Day</label>
+                    <input type="number" id="input-day" min="1" value="1" placeholder="e.g. 1">
+                </div>
+                <div class="form-group">
+                    <label for="input-session">Session Type</label>
+                    <select id="input-session">
+                        <option value="Morning">Morning</option>
+                        <option value="Evening">Evening</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="input-students">Total Students</label>
+                    <input type="number" id="input-students" min="1" placeholder="e.g. 50">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Unavailable Supervisors (Optional):</label>
+                <div class="supervisor-list" id="supervisor-input-list">
+                    <!-- JS will populate this -->
+                </div>
+            </div>
+
+            <button type="button" class="add-btn" onclick="addSessionRow()">+ Add Session to List</button>
+        </div>
+
+        <!-- List Section -->
+        <h2>Added Sessions</h2>
+        <div class="table-container">
+            <table id="sessions-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Day</th>
+                        <th>Session</th>
+                        <th>Students</th>
+                        <th>Unavailable Supervisors</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr id="empty-row">
+                        <td colspan="6" class="empty-state">No sessions added yet.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Actual Form to Submit -->
+        <form action="/generate" method="POST" id="main-form">
             <!-- Hidden inputs to pass the Excel data forward -->
             <input type="hidden" name="rooms_json" value="{{ rooms_json }}">
             <input type="hidden" name="supervisors_json" value="{{ supervisors_json }}">
 
-            <div id="sessions-container">
-                <!-- Sessions will be added here -->
-            </div>
+            <!-- Dynamic hidden inputs will be appended here -->
+            <div id="hidden-inputs-container"></div>
 
-            <button type="button" class="add-btn" onclick="addSession()">+ Add Session</button>
-            <button type="submit" class="submit-btn">Generate Schedule</button>
+            <button type="submit" class="submit-btn" onclick="return validateForm()">Generate Schedule</button>
         </form>
     </div>
 
     <script>
         // Parse the supervisors list from Jinja to JS
         const allSupervisors = JSON.parse('{{ supervisors_json | safe }}');
-        let sessionCount = 0;
+        let sessionCounter = 0; // Unique ID for each session added
+        let rowCount = 0; // Visible row numbering
 
-        function addSession() {
-            sessionCount++;
-            const container = document.getElementById('sessions-container');
-            const div = document.createElement('div');
-            div.className = 'session-group';
-            div.id = 'session-' + sessionCount;
-
-            // Generate Supervisor Checkboxes string
-            let checkboxes = '<div class="supervisor-list">';
-            allSupervisors.forEach(name => {
-                // We use name attribute like: unavailable_sessionID
-                checkboxes += `
-                <div class="supervisor-item">
-                    <input type="checkbox" name="unavailable_${sessionCount}" value="${name}">
-                    <label>${name}</label>
-                </div>
-            `;
+        // Initialize Supervisor List
+        function initSupervisorList() {
+            const container = document.getElementById('supervisor-input-list');
+            let html = '';
+            allSupervisors.forEach((name, index) => {
+                html += `
+                    <div class="supervisor-item">
+                        <input type="checkbox" id="sup-${index}" value="${name}" class="sup-checkbox">
+                        <label for="sup-${index}">${name}</label>
+                    </div>
+                `;
             });
-            checkboxes += '</div>';
-
-            div.innerHTML = `
-            <div class="session-header">
-                <h3>Session ${sessionCount}</h3>
-                <button type="button" class="remove-btn" onclick="removeSession(${sessionCount})">Remove</button>
-            </div>
-            
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <div style="flex: 1;">
-                    <label>Day:</label>
-                    <input type="number" name="day_${sessionCount}" required min="1" value="1" style="width: 60px;">
-                </div>
-                <div style="flex: 1;">
-                    <label>Session:</label>
-                    <select name="session_type_${sessionCount}">
-                        <option value="Morning">Morning</option>
-                        <option value="Evening">Evening</option>
-                    </select>
-                </div>
-                <div style="flex: 1;">
-                    <label>Students:</label>
-                    <input type="number" name="total_students_${sessionCount}" required min="1" style="width: 80px;">
-                </div>
-            </div>
-
-            <label><strong>Check Unavailable Supervisors:</strong></label>
-            ${checkboxes}
-            
-            <!-- Hidden tracker for session IDs so backend knows which to iterate -->
-            <input type="hidden" name="session_ids" value="${sessionCount}">
-        `;
-            container.appendChild(div);
+            container.innerHTML = html;
         }
 
-        function removeSession(id) {
-            const el = document.getElementById('session-' + id);
-            el.remove();
-            // Note: we don't remove the session ID from the submitted "session_ids" 
-            // if we just use getlist() for session_ids, but careful: 
-            // Removing the DOM element removes the inputs, so the "session_ids" input inside it is also removed.
-            // This works perfectly.
+        function addSessionRow() {
+            // 1. Get Values
+            const day = document.getElementById('input-day').value;
+            const sessionType = document.getElementById('input-session').value;
+            const students = document.getElementById('input-students').value;
+
+            // Get Checked Supervisors
+            const checkboxes = document.querySelectorAll('.sup-checkbox:checked');
+            const unavailable = Array.from(checkboxes).map(cb => cb.value);
+
+            // 2. Validation
+            if (!day || !students) {
+                alert("Please fill in Day and Students fields.");
+                return;
+            }
+
+            // 3. Create Backend Data (Hidden Inputs)
+            sessionCounter++;
+            rowCount++;
+            const hiddenContainer = document.getElementById('hidden-inputs-container');
+
+            // Container for this specific session's inputs
+            const sessionInputsDiv = document.createElement('div');
+            sessionInputsDiv.id = `hidden-session-${sessionCounter}`;
+
+            // ID Tracker
+            sessionInputsDiv.innerHTML += `<input type="hidden" name="session_ids" value="${sessionCounter}">`;
+            // Data Fields
+            sessionInputsDiv.innerHTML += `<input type="hidden" name="day_${sessionCounter}" value="${day}">`;
+            sessionInputsDiv.innerHTML += `<input type="hidden" name="session_type_${sessionCounter}" value="${sessionType}">`;
+            sessionInputsDiv.innerHTML += `<input type="hidden" name="total_students_${sessionCounter}" value="${students}">`;
+            // Unavailable List
+            unavailable.forEach(name => {
+                sessionInputsDiv.innerHTML += `<input type="hidden" name="unavailable_${sessionCounter}" value="${name}">`;
+            });
+
+            hiddenContainer.appendChild(sessionInputsDiv);
+
+            // 4. Update Table UI
+            const tableBody = document.querySelector('#sessions-table tbody');
+            const emptyRow = document.getElementById('empty-row');
+            if (emptyRow) emptyRow.remove();
+
+            const tr = document.createElement('tr');
+            tr.id = `row-${sessionCounter}`;
+
+            const unavailableText = unavailable.length > 0 ? unavailable.join(', ') : '<span style="color:#aaa">None</span>';
+
+            tr.innerHTML = `
+                <td>${rowCount}</td>
+                <td>${day}</td>
+                <td>${sessionType}</td>
+                <td>${students}</td>
+                <td class="unavailable-cell" title="${unavailable.join(', ')}">${unavailableText}</td>
+                <td>
+                    <button type="button" class="remove-btn" onclick="removeSession(${sessionCounter}, this)">Remove</button>
+                </td>
+            `;
+            tableBody.appendChild(tr);
+
+            // 5. Reset Form
+            document.getElementById('input-students').value = '';
+            // Reset checkboxes
+            checkboxes.forEach(cb => cb.checked = false);
+            // Optional: Auto-increment day or clear it? keeping day is usually helpful.
+            // document.getElementById('input-day').value = ''; 
         }
 
-        // Add initial session
-        window.onload = addSession;
+        function removeSession(id, btnElement) {
+            // 1. Remove Hidden Inputs
+            const hiddenGroup = document.getElementById(`hidden-session-${id}`);
+            if (hiddenGroup) hiddenGroup.remove();
+
+            // 2. Remove Table Row
+            const row = document.getElementById(`row-${id}`);
+            if (row) row.remove();
+
+            // 3. Check if empty
+            const tableBody = document.querySelector('#sessions-table tbody');
+            if (tableBody.children.length === 0) {
+                tableBody.innerHTML = '<tr id="empty-row"><td colspan="6" class="empty-state">No sessions added yet.</td></tr>';
+                rowCount = 0; // Reset count if empty
+            }
+        }
+
+        function validateForm() {
+            const hiddenContainer = document.getElementById('hidden-inputs-container');
+            if (hiddenContainer.children.length === 0) {
+                alert("Please add at least one session config before generating.");
+                return false;
+            }
+            return true;
+        }
+
+        // Init
+        window.onload = initSupervisorList;
+
     </script>
 
 </body>
