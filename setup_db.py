@@ -55,16 +55,16 @@ try:
     """)
     print("- Blocks table check.")
 
+    cursor.execute("drop table schedules")
+    
     # 3. Schedules
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        day TEXT,
-        session TEXT,
-        block_name TEXT,
-        supervisor_name TEXT,
-        is_backup BOOLEAN
+        exam_name TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        input_snapshot JSONB NOT NULL,
+        schedule_result JSONB NOT NULL
     );
     """)
     print("- Schedules table check.")

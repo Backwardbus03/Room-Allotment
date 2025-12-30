@@ -4,127 +4,126 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exam Scheduling System</title>
+    <title>Admin Dashboard - Exam Scheduler</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f4f4f9;
-            color: #333;
-            display: flex;
-            justify-content: center;
-            padding: 20px;
         }
 
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            width: 100%;
-            max-width: 800px;
+        .dashboard-container {
+            max-width: 1000px;
+            margin: 30px auto;
         }
 
-        h1 {
-            text-align: center;
-            color: #444;
-        }
-
-        label {
-            display: block;
-            margin-top: 15px;
-            font-weight: bold;
-        }
-
-        input[type="number"],
-        textarea,
-        select {
-            width: 100%;
-            padding: 10px;
-            margin-top: 5px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-
-        button {
-            background-color: #5c6bc0;
-            color: white;
+        .card {
             border: none;
-            padding: 10px 20px;
-            text-transform: uppercase;
-            margin-top: 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            width: 100%;
-            font-size: 16px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
         }
 
-        button:hover {
-            background-color: #3f51b5;
+        .card-header {
+            background-color: white;
+            border-bottom: 2px solid #f0f0f0;
+            padding: 15px 20px;
         }
 
-        .session-group {
-            border: 1px solid #eee;
-            padding: 15px;
-            margin-top: 15px;
-            border-radius: 4px;
-            background-color: #fafafa;
-        }
-
-        .session-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        .session-header h3 {
+        .card-header h5 {
             margin: 0;
-            font-size: 1.1em;
-            color: #555;
-        }
-
-        .remove-btn {
-            background-color: #ef5350;
-            width: auto;
-            padding: 5px 10px;
-            margin-top: 0;
-            font-size: 12px;
-        }
-
-        .remove-btn:hover {
-            background-color: #d32f2f;
-        }
-
-        .add-btn {
-            background-color: #66bb6a;
-            margin-top: 10px;
-        }
-
-        .add-btn:hover {
-            background-color: #43a047;
+            color: #444;
+            font-weight: 600;
         }
     </style>
 </head>
 
 <body>
 
-    <div class="container">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h1>Exam Scheduler</h1>
-            <a href="/logout" style="text-decoration: none; color: #ef5350;">Logout</a>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#">Exam Scheduler Admin</a>
+            <div class="d-flex">
+                <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
+            </div>
         </div>
-        <form action="/configure" method="POST" enctype="multipart/form-data">
-            <label for="blocks_file">Blocks/Rooms Excel File (Col 1: Room No, Col 2: Capacity):</label>
-            <input type="file" id="blocks_file" name="blocks_file" accept=".xlsx, .xls" required>
+    </nav>
 
-            <label for="supervisors_file">Supervisors Excel File (Col 1: Name):</label>
-            <input type="file" id="supervisors_file" name="supervisors_file" accept=".xlsx, .xls" required>
+    <div class="dashboard-container container">
 
-            <button type="submit">Next: Configure Sessions</button>
-        </form>
+        <div class="row">
+            <!-- Create New Schedule Section -->
+            <div class="col-md-5">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Create New Schedule</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Upload configuration files to start a new session planning.</p>
+                        <form action="/configure" method="POST" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label for="blocks_file" class="form-label">Blocks/Rooms Excel</label>
+                                <input class="form-control" type="file" id="blocks_file" name="blocks_file"
+                                    accept=".xlsx, .xls" required>
+                                <div class="form-text">Cols: Room No, Capacity</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="supervisors_file" class="form-label">Supervisors Excel</label>
+                                <input class="form-control" type="file" id="supervisors_file" name="supervisors_file"
+                                    accept=".xlsx, .xls" required>
+                                <div class="form-text">Cols: Name</div>
+                            </div>
+
+                            <button type="submit" class="btn btn-success w-100">Proceed to Configure &rarr;</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Existing Schedules Section -->
+            <div class="col-md-7">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Existing Generated Schedules</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if exams %}
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Exam Name</th>
+                                        <th>Created Date</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for exam in exams %}
+                                    <tr>
+                                        <td class="fw-bold">{{ exam.name }}</td>
+                                        <td class="small text-muted">{{ exam.date.strftime('%Y-%m-%d %H:%M') if
+                                            exam.date else 'N/A' }}</td>
+                                        <td>
+                                            <a href="{{ url_for('admin_dashboard', exam_name=exam.name) }}"
+                                                class="btn btn-sm btn-primary">View</a>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        {% else %}
+                        <div class="text-center py-5 text-muted">
+                            <p>No schedules generated yet.</p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 
 </html>

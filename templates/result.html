@@ -90,8 +90,40 @@
             </tbody>
         </table>
 
-        <h2>Allocation Chart</h2>
-        {% if schedule_table %}
+        <h2>Detailed Allocation Schedule</h2>
+        {% if schedule_data %}
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Day</th>
+                        <th>Session</th>
+                        <th>Block</th>
+                        <th>Role</th>
+                        <th>Supervisor</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in schedule_data %}
+                    <tr class="{% if 'BACKUP' in row.Role %}table-warning{% endif %}">
+                        <td>{{ row.Day }}</td>
+                        <td>{{ row.Session }}</td>
+                        <td>{{ row.Block }}</td>
+                        <td>
+                            {% if 'BACKUP' in row.Role %}
+                            <span class="badge bg-warning text-dark">{{ row.Role }}</span>
+                            {% else %}
+                            <span class="badge bg-primary">{{ row.Role }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="fw-bold">{{ row.Supervisor }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% elif schedule_table %}
+        {# Fallback for legacy views or if raw data missing #}
         {{ schedule_table | safe }}
         {% else %}
         <p>No schedule generated.</p>

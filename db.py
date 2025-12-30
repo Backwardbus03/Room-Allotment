@@ -148,10 +148,9 @@ def upsert_blocks(rooms_list):
     finally:
         conn.close()
 
-def save_schedule(schedule_data):
+def save_schedule(exam_name, input_snapshot, schedule_result):
     """
-    Saves the new schedule.
-    schedule_data is list of dicts: {'Day': '...', 'Session': '...', 'Block': '...', 'Supervisor': '...'}
+    Saves the new schedule as a snapshot.
     """
     conn = get_connection()
     if not conn: return
@@ -159,28 +158,21 @@ def save_schedule(schedule_data):
     try:
         cur = conn.cursor()
         
-        # Optional: Clear old schedule? 
-        # For now, let's assuming we append, or maybe we really should clear all for clarity in this demo.
-        # cur.execute("TRUNCATE TABLE schedules;") # Careful with truncate
+        # Insert or Update (Assuming we might want to update if same exam name? 
+        # For now let's just Insert, or assume exam names are unique-ish enough or we allow duplicates)
+        # Using JSONB for postgres
+        import json
         
-        # Let's perform a bulk insert
+        query = """
+        INSERT INTO schedules (exam_name, input_snapshot, schedule_result)
+        VALUES (%s, %s, %s)
+        """
         
-        values = []
-        for row in schedule_data:
-            is_backup = (row['Block'] == 'BACKUP')
-            values.append((
-                row['Day'], 
-                row['Session'], 
-                row['Block'], 
-                row['Supervisor'], 
-                is_backup
-            ))
-            
-        # Using execute_mogrify approach or executemany
-        cur.executemany("""
-            INSERT INTO schedules (day, session, block_name, supervisor_name, is_backup)
-            VALUES (%s, %s, %s, %s, %s)
-        """, values)
+        cur.execute(query, (
+            exam_name, 
+            json.dumps(input_snapshot), 
+            json.dumps(schedule_result)
+        ))
         
         conn.commit()
         cur.close()
@@ -189,44 +181,76 @@ def save_schedule(schedule_data):
     finally:
         conn.close()
 
-def get_schedule_for_supervisor(name):
-    """Fetch schedule rows for a specific supervisor."""
+def get_available_exams():
+    """Returns list of distinct exam names available in the db."""
     conn = get_connection()
     if not conn: return []
     
     try:
-        # Use RealDictCursor to get dictionary-like result
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM schedules WHERE supervisor_name = %s", (name,))
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT exam_name, created_at FROM schedules ORDER BY created_at DESC")
         rows = cur.fetchall()
-        
-        ui_data = []
-        for row in rows:
-            ui_data.append({
-                "Day": row['day'],
-                "Session": row['session'],
-                "Block": row['block_name'],
-                "Supervisor": row['supervisor_name']
-            })
-            
         cur.close()
-        return ui_data
+        return [{'name': r[0], 'date': r[1]} for r in rows]
+    except Exception as e:
+        print(f"Error fetching exams: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_schedule_for_supervisor(exam_name, supervisor_name):
+    """
+    Fetch duties for a specific supervisor in a specific exam.
+    Parses the JSONB schedule_result.
+    """
+    conn = get_connection()
+    if not conn: return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Get the schedule blob
+        cur.execute("SELECT schedule_result FROM schedules WHERE exam_name = %s", (exam_name,))
+        row = cur.fetchone()
+        cur.close()
+        
+        if not row: return []
+        
+        full_schedule = row['schedule_result'] # this is a list of dicts from the JSONB column
+        
+        # Filter in Python (easier than complex JSONB query for now)
+        my_duties = []
+        for item in full_schedule:
+            if item.get('Supervisor') == supervisor_name:
+                my_duties.append(item)
+                
+        return my_duties
+        
     except Exception as e:
         print(f"Error fetching schedule: {e}")
         return []
     finally:
         conn.close()
 
-def clear_schedule_data():
-    """Helper to clear schedule table if needed"""
+def get_full_schedule(exam_name):
+    """
+    Fetch the entire schedule for a specific exam (for Admin view).
+    """
     conn = get_connection()
-    if not conn: return
+    if not conn: return []
+    
     try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM schedules")
-        conn.commit()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT schedule_result FROM schedules WHERE exam_name = %s", (exam_name,))
+        row = cur.fetchone()
         cur.close()
+        
+        if not row: return []
+        return row['schedule_result'] # Return the list of dicts
+        
     except Exception as e:
-        print(f"Error clearing schedule: {e}")
+        print(f"Error fetching full schedule: {e}")
+        return []
     finally:
         conn.close()
+
+

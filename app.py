@@ -100,8 +100,59 @@ def logout():
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
-    return render_template('index.html')
-
+    # 1. Fetch all available exams
+    exams = db.get_available_exams()
+    
+    # 2. Check if a specific exam is requested to view
+    selected_exam = request.args.get('exam_name')
+    
+    schedule_html = None
+    sorted_duties = None
+    
+    if selected_exam:
+        # Fetch full schedule
+        schedule_data = db.get_full_schedule(selected_exam)
+        
+        if schedule_data:
+            # Reconstruct the view
+            
+            # 1. Duty Counts
+            duty_counts = {}
+            for row in schedule_data:
+                sup = row.get('Supervisor', 'Unknown')
+                if sup != 'NA' and sup != 'NOBODY AVAILABLE':
+                    duty_counts[sup] = duty_counts.get(sup, 0) + 1
+            sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            # 2. Schedule HTML Pivot
+            schedule_html = ""
+            try:
+                df = pd.DataFrame(schedule_data)
+                
+                # Create display value
+                display_role = df['Role'].apply(lambda x: "M" if "BLOCK" in str(x) else "B")
+                df['Display'] = df['Supervisor'] + " (" + display_role + ")"
+                
+                chart = df.pivot_table(
+                    index=['Day', 'Session'], 
+                    columns='Block', 
+                    values='Display', 
+                    aggfunc=lambda x: '<br>'.join(x)
+                ).fillna("-")
+                
+                schedule_html = chart.to_html(classes='table table-striped table-bordered text-center', border=0, escape=False)
+            except Exception as ex:
+                schedule_html = f"<p class='text-danger'>Chart unavailable: {str(ex)}</p>"
+            
+            return render_template('result.html', 
+                                   duty_report=sorted_duties, 
+                                   schedule_table=schedule_html, 
+                                   schedule_data=schedule_data,
+                                   exam_name=selected_exam,
+                                   is_history=True)
+                                   
+    return render_template('index.html', exams=exams)
+    
 @app.route('/configure', methods=['POST'])
 @admin_required
 def configure():
@@ -165,6 +216,7 @@ def generate():
         rooms = json.loads(request.form.get('rooms_json'))
         supervisors = json.loads(request.form.get('supervisors_json'))
         session_ids = request.form.getlist('session_ids')
+        exam_name = request.form.get('exam_name', 'Untitled Exam')
         
         sessions_data = []
         for sid in session_ids:
@@ -189,17 +241,41 @@ def generate():
         # Process & Save
         schedule_data = result['schedule']
         
-        # SAVE TO DB
+        # SAVE TO DB (New Snapshot method)
         if schedule_data:
-            db.clear_schedule_data() # Optional: Clear old schedule first
-            db.save_schedule(schedule_data)
+            input_snapshot = {
+                'rooms': rooms,
+                'supervisors': supervisors,
+                'sessions_data': sessions_data
+            }
+            db.save_schedule(exam_name, input_snapshot, schedule_data)
         
         # Prepare HTML for display
         schedule_html = ""
         if schedule_data:
             df = pd.DataFrame(schedule_data)
-            chart = df.pivot(index=['Day', 'Session'], columns='Block', values='Supervisor').fillna("-")
-            schedule_html = chart.to_html(classes='table table-striped', border=0)
+            try:
+                # Use pivot_table with custom aggregation to handle Main + Backup in same cell
+                # We want to display: "Name (Role) <br> Name (Role)"
+                def agg_supervisors(series):
+                    # We need access to the Role, but series is just the Supervisors.
+                    # We need to act on the group.
+                    # Simpler approach: Create a composite string column first.
+                    return "<br>".join(series)
+
+                # Create display value
+                df['Display'] = df['Supervisor'] + " (" + df['Role'].apply(lambda x: "M" if "BLOCK" in x else "B") + ")"
+                
+                chart = df.pivot_table(
+                    index=['Day', 'Session'], 
+                    columns='Block', 
+                    values='Display', 
+                    aggfunc=lambda x: '<br>'.join(x)
+                ).fillna("-")
+                
+                schedule_html = chart.to_html(classes='table table-striped table-bordered text-center', border=0, escape=False)
+            except Exception as ex:
+                schedule_html = f"<p class='text-danger'>Note: Overview chart generation failed ({str(ex)}). Please refer to the detailed list below.</p>"
         else:
             schedule_html = "<p>No schedule data generated.</p>"
 
@@ -218,13 +294,25 @@ def generate():
 def supervisor_dashboard():
     name = session.get('user_name')
     
+    # 1. Get List of Exams
+    available_exams = db.get_available_exams()
+    
+    # 2. Check if specific exam selected
+    selected_exam = request.args.get('exam_name')
+    
     my_schedule = []
+    
     try:
-        my_schedule = db.get_schedule_for_supervisor(name)
+        if selected_exam:
+            my_schedule = db.get_schedule_for_supervisor(selected_exam, name)
     except Exception as e:
         flash(f"Error loading schedule: {e}")
             
-    return render_template('supervisor_dashboard.html', schedule=my_schedule, name=name)
+    return render_template('supervisor_dashboard.html', 
+                           exams=available_exams, 
+                           selected_exam=selected_exam, 
+                           schedule=my_schedule, 
+                           name=name)
 
 if __name__ == '__main__':
     app.run(debug=True)

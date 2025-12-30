@@ -1,110 +1,144 @@
-from collections import defaultdict
-import random
+export function generateSchedule({ supervisors, blocks, examData }) {
+
+  
+  const sessions = [];
+
+  for (const day of examData.days) {
+    for (const session of Object.keys(day.sessions)) {
+      sessions.push({
+        date: day.date,
+        session,
+        unavailable: day.unavailable,
+        students: day.sessions[session]
+      });
+    }
+  }
+
+  
+  const roles = [];
+  for (const s of sessions) {
+    roles.push({ session: s, role: "MAIN" });
+    roles.push({ session: s, role: "BACKUP" });
+  }
+
+  
+  const availability = new Map();
+
+  for (const s of sessions) {
+    const key = `${s.date}-${s.session}`;
+    availability.set(
+      key,
+      supervisors.filter(sup => !s.unavailable.includes(sup))
+    );
+  }
+
+  
+  const totalRoles = roles.length;
+  const n = supervisors.length;
+  const ideal = Math.floor(totalRoles / n);
+  const maxFair = ideal + 1;
+
+  const availabilityCount = {};
+  supervisors.forEach(s => availabilityCount[s] = 0);
+
+  for (const list of availability.values()) {
+    for (const s of list) availabilityCount[s] += 2;
+  }
+
+  const maxAllowed = {};
+  supervisors.forEach(s => {
+    maxAllowed[s] = Math.min(maxFair, availabilityCount[s]);
+  });
+
+  
+  roles.sort((a, b) => {
+    const aKey = `${a.session.date}-${a.session.session}`;
+    const bKey = `${b.session.date}-${b.session.session}`;
+
+    const diff =
+      availability.get(aKey).length -
+      availability.get(bKey).length;
+
+    if (diff !== 0) return diff;
+
+    if (a.role === "MAIN" && b.role === "BACKUP") return -1;
+    if (a.role === "BACKUP" && b.role === "MAIN") return 1;
+    return 0;
+  });
+
+  
+  const dutyCount = {};
+  const assignments = {};
+  supervisors.forEach(s => dutyCount[s] = 0);
+
+  let fairnessRelaxed = false;
+
+  for (const r of roles) {
+    const key = `${r.session.date}-${r.session.session}`;
+
+    const used = new Set();
+    if (r.role === "BACKUP") {
+      used.add(assignments[`${key}-MAIN`]);
+    }
+
+    let eligible = availability
+      .get(key)
+      .filter(s => !used.has(s) && dutyCount[s] < maxAllowed[s]);
+
+    if (eligible.length === 0) {
+      fairnessRelaxed = true;
+      eligible = availability.get(key).filter(s => !used.has(s));
+    }
+
+    const minLoad = Math.min(...eligible.map(s => dutyCount[s]));
+    const candidates = eligible.filter(s => dutyCount[s] === minLoad);
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+
+    assignments[`${key}-${r.role}`] = chosen;
+    dutyCount[chosen]++;
+  }
+
+  
+  const scheduleBySupervisor = {};
+  supervisors.forEach(s => scheduleBySupervisor[s] = []);
 
 
-supervisors = ["A", "B", "C", "D"]
+  const sortedBlocks = [...blocks].sort((a, b) => b.capacity - a.capacity);
 
-sessions = [
-    ("Day1", "M"), ("Day1", "E"),
-    ("Day2", "M"), ("Day2", "E"),
-    ("Day3", "M"), ("Day3", "E"),
-    ("Day4", "M"), ("Day4", "E"),
-]
+  for (const s of sessions) {
+    let remaining = s.students;
+    const blocksUsed = [];
 
-availability = {
-    ("Day1", "M"): ["A", "B", "C", "D"],
-    ("Day1", "E"): ["A", "B", "C", "D"],
-    ("Day2", "M"): ["A", "B"],
-    ("Day2", "E"): ["A", "B"],
-    ("Day3", "M"): ["A", "B"],
-    ("Day3", "E"): ["A", "B"],
-    ("Day4", "M"): ["A", "B"],
-    ("Day4", "E"): ["A", "B"],
+    for (const b of sortedBlocks) {
+      if (remaining <= 0) break;
+      blocksUsed.push(b.block);
+      remaining -= b.capacity;
+    }
+
+    const main = assignments[`${s.date}-${s.session}-MAIN`];
+    const backup = assignments[`${s.date}-${s.session}-BACKUP`];
+
+    for (const block of blocksUsed) {
+      scheduleBySupervisor[main].push({
+        date: s.date,
+        session: s.session,
+        block,
+        role: "MAIN"
+      });
+
+      scheduleBySupervisor[backup].push({
+        date: s.date,
+        session: s.session,
+        block,
+        role: "BACKUP"
+      });
+    }
+  }
+
+  return {
+    scheduleBySupervisor,
+    dutyReport: dutyCount,
+    fairnessRelaxed
+  };
 }
-
-
-roles = []
-for s in sessions:
-    roles.append((s, "MAIN"))
-    roles.append((s, "BACKUP"))
-
-
-total_roles = len(roles)
-n = len(supervisors)
-
-ideal = total_roles // n
-max_fair = ideal + 1
-
-availability_count = defaultdict(int)
-for s in sessions:
-    for sup in availability[s]:
-        availability_count[sup] += 2
-
-max_allowed = {
-    sup: min(max_fair, availability_count[sup])
-    for sup in supervisors
-}
-
-
-def role_choices(role):
-    session, _ = role
-    return len(availability[session])
-
-roles.sort(key=lambda r: (role_choices(r), 0 if r[1] == "MAIN" else 1))
-
-
-
-duty_count = defaultdict(int)
-assignments = {}
-fairness_violated = False
-
-for role in roles:
-    session, role_type = role
-    used = set()
-
-    if role_type == "BACKUP":
-        used.add(assignments[(session, "MAIN")])
-
-    
-    eligible = [
-        sup for sup in availability[session]
-        if sup not in used and duty_count[sup] < max_allowed[sup]
-    ]
-
-   
-    if not eligible:
-        fairness_violated = True
-        eligible = [
-            sup for sup in availability[session]
-            if sup not in used
-        ]
-
-    if not eligible:
-        raise Exception("No supervisor available at all for " + str(role))
-
-    
-    min_load = min(duty_count[s] for s in eligible)
-    candidates = [s for s in eligible if duty_count[s] == min_load]
-    chosen = random.choice(candidates)
-
-    assignments[role] = chosen
-    duty_count[chosen] += 1
-
-
-print("\nSCHEDULE:\n")
-for session in sessions:
-    print(session,
-          "MAIN:", assignments[(session, "MAIN")],
-          "BACKUP:", assignments[(session, "BACKUP")])
-
-print("\nDUTY COUNT:")
-for sup in supervisors:
-    print(sup, ":", duty_count[sup])
-
-diff = max(duty_count.values()) - min(duty_count.values())
-print("\nMax - Min Difference:", diff)
-
-if fairness_violated:
-    print("\n⚠️ Fairness constraint was relaxed due to availability/backup constraints.")
-else:
-    print("\n✅ Strict fairness maintained.")

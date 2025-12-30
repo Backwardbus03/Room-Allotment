@@ -1,164 +1,181 @@
 import pandas as pd
 import random
 import uuid
+from collections import defaultdict
 
 def generate_schedule(num_days, rooms, supervisors, sessions_data):
     """
-    Generates a balanced exam schedule using Two-Pass Scarcity-Weighted Heuristic.
-    Pass 1: Assign Room Supervisors (Main Duties) - Balanced by Main Count.
-    Pass 2: Assign Backup Supervisor - Balanced by Total Count.
-
-    Args:
-        num_days (int): Number of exam days.
-        rooms (list): List of dicts.
-        supervisors (list): List of supervisor names.
-        sessions_data (list): List of dictionaries containing session details.
-
-    Returns:
-        dict: Contains 'schedule_data' (list of dicts) and 'duty_counts' (dict).
+    Generates a schedule with Double Supervision (1 Main + 1 Backup) per Block.
+    
+    Logic:
+    1. Calculate required rooms for each session (Students / Room Capacity).
+    2. Create TASKS for every required room: 1 MAIN task + 1 BACKUP task.
+    3. Sort all tasks globally by Session Scarcity (fewest available supervisors).
+    4. Assign supervisors using Least-Duty-First with Fairness constraints.
+       - Ensures a supervisor is only assigned ONCE per Session.
     """
     
-    # 1. SETUP
+    # 1. PREP DATA
     all_supervisors = [s.strip() for s in supervisors if s.strip()]
-    main_counts = {name: 0 for name in all_supervisors}
-    total_counts = {name: 0 for name in all_supervisors}
-    
-    schedule_data = []
+    if not all_supervisors:
+        return {"schedule": [], "duties": {}}
 
-    # Assign IDs
+    # Map session IDs
+    session_map = {}
     for s in sessions_data:
-        s['_id'] = str(uuid.uuid4())
+        if '_id' not in s:
+            s['_id'] = str(uuid.uuid4())
+        session_map[s['_id']] = s
 
-    # 2. GLOBAL ANALYSIS (SCARCITY)
-    availability_count = {name: 0 for name in all_supervisors}
-    session_candidates = {}
+    # Sort rooms by capacity (Descending) as preferred by user
+    sorted_rooms = sorted(rooms, key=lambda r: r['capacity'], reverse=True)
+
+    # 2. DEFINE TASKS
+    tasks = []
+    
+    # Pre-calculate session availability and scarcity
+    # session_availability[sess_id] = [sup1, sup2, ...]
+    session_availability = {}
     
     for sess in sessions_data:
+        sess_id = sess['_id']
         unavailable = set(sess.get('unavailable', []))
         candidates = [name for name in all_supervisors if name not in unavailable]
-        session_candidates[sess['_id']] = candidates
-        for name in candidates:
-            availability_count[name] += 1
-            
-    # 3. PREPARE SESSIONS
-    augmented_sessions = []
-    for sess in sessions_data:
-        total_students = int(sess['total_students'])
+        session_availability[sess_id] = candidates
         
         # Calculate Rooms Needed
+        total_students = int(sess['total_students'])
         students_remaining = total_students
-        rooms_used = []
-        for room in rooms:
+        
+        for room in sorted_rooms:
             if students_remaining <= 0: break
+            
             used_cap = min(room['capacity'], students_remaining)
-            rooms_used.append(room['name'])
             students_remaining -= used_cap
             
-        required_main = len(rooms_used)
-        candidates = session_candidates[sess['_id']]
-        
-        # Difficulty = (Available) - (Main Needed)
-        # We focus on main constraint first
-        difficulty_score = len(candidates) - required_main
-        
-        augmented_sessions.append({
-            'data': sess,
-            'rooms_used': rooms_used,
-            'candidates': candidates, # This list is static per session
-            'score': difficulty_score,
-            'assigned_supervisors': [] # Track who is taken in Pass 1
-        })
-        
-    # Sort by Difficulty (Tightest First)
-    augmented_sessions.sort(key=lambda x: x['score'])
-    
-    # ==========================
-    # PASS 1: MAIN ASSIGNMENTS
-    # ==========================
-    for item in augmented_sessions:
-        data = item['data']
-        rooms_used = item['rooms_used']
-        candidates = item['candidates']
-        
-        needed = len(rooms_used)
-        
-        # Filter candidates: Only those NOT excluded by user (already done in step 2)
-        # But for sorting, we use MAIN counts
-        
-        # Dynamic Sort:
-        # 1. Main Duty Count (Asc) - BALANCE MAIN LOAD
-        # 2. Total Availability (Asc) - SCARCITY
-        random.shuffle(candidates)
-        candidates.sort(key=lambda name: (main_counts[name], availability_count[name]))
-        
-        selected = candidates[:needed]
-        item['assigned_supervisors'] = selected # Save for Pass 2 exclusion
-        
-        day_str = f"Day {data['day']}"
-        sess_str = data['session']
-        
-        for i, room_name in enumerate(rooms_used):
-            if i < len(selected):
-                sup = selected[i]
-                schedule_data.append({
-                    "Day": day_str,
-                    "Session": sess_str,
-                    "Block": room_name,
-                    "Supervisor": sup
-                })
-                main_counts[sup] += 1
-                total_counts[sup] += 1
+            # --- CREATE 2 TASKS PER ROOM ---
+            
+            # 1. Main Supervisor
+            tasks.append({
+                'session_id': sess_id,
+                'block': room['name'],
+                'role': 'MAIN',
+                'display_role': 'BLOCK SUPERVISOR'
+            })
+            
+            # 2. Backup Supervisor
+            tasks.append({
+                'session_id': sess_id,
+                'block': room['name'],
+                'role': 'BACKUP',
+                'display_role': 'BACKUP SUPERVISOR'
+            })
 
-    # ==========================
-    # PASS 2: BACKUP ASSIGNMENTS
-    # ==========================
-    # We can re-sort augmented_sessions if we want, but keeping same order is fine/consistent
+    # 3. FAIRNESS CONSTANTS
+    total_tasks = len(tasks)
+    n_sups = len(all_supervisors)
+    if n_sups == 0: return {"schedule": [], "duties": {}}
     
-    for item in augmented_sessions:
-        data = item['data']
-        candidates = item['candidates']
-        assigned_in_main = set(item['assigned_supervisors'])
+    ideal = total_tasks // n_sups
+    max_fair = ideal + 1
+    
+    # Per-supervisor max allowed (capped by their total availability?)
+    # Replicating logic: max_allowed[s] = min(max_fair, availability_count[s])
+    # However, global availability might be high but they might be needed for specific hard sessions.
+    # Let's stick to the simpler max_fair for now, or the strict temp.py logic if preferred.
+    # User's temp.py logic:
+    # availability_count[sup] += 2 (per session available) -> roughly total slots they COULD fill
+    # max_allowed[sup] = min(max_fair, availability_count[sup])
+    
+    # Let's count how many SESSIONS they are available for
+    sup_session_availability_count = defaultdict(int)
+    for sess in sessions_data:
+        for name in session_availability[sess['_id']]:
+            sup_session_availability_count[name] += 1 # They could potentially do 1 task here
+            # Ideally they can do 1 task per session.
+            
+    max_allowed = {
+        name: max_fair 
+        for name in all_supervisors
+    }
+
+    # 4. SORT TASKS
+    # Key 1: Scarcity of the Session (Ascending)
+    # Key 2: Role (Main=0, Backup=1) - Fill Rooms first
+    
+    def get_scarcity(task):
+        return len(session_availability[task['session_id']])
         
-        # Filter: Can't be someone already doing a room in this session
-        valid_backups = [c for c in candidates if c not in assigned_in_main]
+    random.shuffle(tasks) # Randomize initially
+    tasks.sort(key=lambda t: (get_scarcity(t), 0 if t['role'] == 'MAIN' else 1))
+
+    # 5. ASSIGNMENT LOOP
+    assignments = []
+    duty_count = defaultdict(int)
+    
+    # Track assigned supervisors per session to prevent double booking
+    # session_assignments[sess_id] = set(names)
+    session_assignments = defaultdict(set)
+    
+    for task in tasks:
+        sess_id = task['session_id']
+        sess_data = session_map[sess_id]
         
-        if not valid_backups:
-            # Critical: No one left for backup!
-            schedule_data.append({
-                "Day": f"Day {data['day']}",
-                "Session": data['session'],
-                "Block": "BACKUP",
+        candidates = session_availability[sess_id]
+        current_session_busy = session_assignments[sess_id]
+        
+        # Filter 1: Available & Not Busy
+        eligible = [c for c in candidates if c not in current_session_busy]
+        
+        if not eligible:
+             assignments.append({
+                "Day": f"Day {sess_data['day']}",
+                "Session": sess_data['session'],
+                "Block": task['block'],
+                "Role": task['display_role'],
                 "Supervisor": "NOBODY AVAILABLE"
             })
-            continue
-
-        # Dynamic Sort:
-        # 1. TOTAL Duty Count (Asc) - Balance overall load now
-        # 2. Availability (Asc)
-        random.shuffle(valid_backups)
-        valid_backups.sort(key=lambda name: (total_counts[name], availability_count[name]))
+             continue
+             
+        # Filter 2: Fairness (Strict)
+        strict_pool = [c for c in eligible if duty_count[c] < max_allowed[c]]
         
-        backup_sup = valid_backups[0]
+        final_pool = strict_pool if strict_pool else eligible
         
-        schedule_data.append({
-            "Day": f"Day {data['day']}",
-            "Session": data['session'],
-            "Block": "BACKUP",
-            "Supervisor": backup_sup
+        # Filter 3: Least Loading (Dynamic Balancing)
+        # Sort by current duty count
+        final_pool.sort(key=lambda x: duty_count[x])
+        
+        min_load = duty_count[final_pool[0]]
+        best_candidates = [x for x in final_pool if duty_count[x] == min_load]
+        
+        chosen = random.choice(best_candidates)
+        
+        # Commit
+        duty_count[chosen] += 1
+        session_assignments[sess_id].add(chosen)
+        
+        assignments.append({
+            "Day": f"Day {sess_data['day']}",
+            "Session": sess_data['session'],
+            "Block": task['block'],
+            "Role": task['display_role'],
+            "Supervisor": chosen
         })
-        # Note: We DON'T increment main_counts, only total
-        total_counts[backup_sup] += 1
 
-    # 5. FINAL SORT FOR DISPLAY
+    # 6. FINAL SORT
     def sort_key(row):
         d_num = int(row['Day'].split(' ')[1])
         s_rank = 0 if row['Session'] == 'Morning' else 1
-        is_backup = 1 if row['Block'] == 'BACKUP' else 0
-        return (d_num, s_rank, is_backup)
+        # Sort by Room Name, then Role (Block Sup then Backup Sup)
+        is_backup = 1 if 'BACKUP' in row['Role'] else 0
+        return (d_num, s_rank, row['Block'], is_backup)
         
-    schedule_data.sort(key=sort_key)
+    assignments.sort(key=sort_key)
 
     return {
-        "schedule": schedule_data,
-        "duties": total_counts # Return total counts for the report
+        "schedule": assignments,
+        "duties": dict(duty_count)
     }
+
+
