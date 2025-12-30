@@ -1,3 +1,6 @@
 flask
 pandas
 openpyxl
+python-dotenv
+supabase
+psycopg2

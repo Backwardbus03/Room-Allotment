@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Exam Scheduler</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        .login-card {
+            max-width: 400px;
+            width: 100%;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            background: white;
+        }
+
+        .nav-pills .nav-link.active {
+            background-color: #0d6efd;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="login-card">
+        <h3 class="text-center mb-4">Exam Scheduler</h3>
+
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="alert alert-danger">
+            {{ messages[0] }}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <ul class="nav nav-pills nav-fill mb-3" id="pills-tab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="pills-admin-tab" data-bs-toggle="pill" data-bs-target="#pills-admin"
+                    type="button" role="tab">Admin</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="pills-supervisor-tab" data-bs-toggle="pill"
+                    data-bs-target="#pills-supervisor" type="button" role="tab">Supervisor</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="pills-register-tab" data-bs-toggle="pill" data-bs-target="#pills-register"
+                    type="button" role="tab">Register</button>
+            </li>
+        </ul>
+
+        <div class="tab-content" id="pills-tabContent">
+            <!-- Admin Form -->
+            <div class="tab-pane fade show active" id="pills-admin" role="tabpanel">
+                <form method="POST">
+                    <input type="hidden" name="role" value="admin">
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" required
+                            placeholder="Enter Admin Password">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Login as Admin</button>
+                </form>
+            </div>
+
+            <!-- Supervisor Form -->
+            <div class="tab-pane fade" id="pills-supervisor" role="tabpanel">
+                <div class="alert alert-info small">
+                    Login with your full name as it appears in the uploaded records.
+                </div>
+                <form method="POST">
+                    <input type="hidden" name="role" value="supervisor">
+                    <div class="mb-3">
+                        <label class="form-label">Full Name</label>
+                        <input type="text" name="name" class="form-control" required placeholder="e.g. John Doe">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" required
+                            placeholder="Default: 123456">
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">Login as Supervisor</button>
+                </form>
+            </div>
+
+            <!-- Register Form -->
+            <div class="tab-pane fade" id="pills-register" role="tabpanel">
+                <form action="/register" method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Full Name</label>
+                        <input type="text" name="name" class="form-control" required placeholder="Your Name">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" required
+                            placeholder="Set a Password">
+                    </div>
+                    <button type="submit" class="btn btn-warning w-100">Register</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+
+</html>

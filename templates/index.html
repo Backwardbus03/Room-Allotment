@@ -110,7 +110,10 @@
 <body>
 
     <div class="container">
-        <h1>Exam Scheduler</h1>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h1>Exam Scheduler</h1>
+            <a href="/logout" style="text-decoration: none; color: #ef5350;">Logout</a>
+        </div>
         <form action="/configure" method="POST" enctype="multipart/form-data">
             <label for="blocks_file">Blocks/Rooms Excel File (Col 1: Room No, Col 2: Capacity):</label>
             <input type="file" id="blocks_file" name="blocks_file" accept=".xlsx, .xls" required>
