@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam Scheduling System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 800px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #444;
+        }
+
+        label {
+            display: block;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+
+        input[type="number"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #5c6bc0;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            text-transform: uppercase;
+            margin-top: 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background-color: #3f51b5;
+        }
+
+        .session-group {
+            border: 1px solid #eee;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 4px;
+            background-color: #fafafa;
+        }
+
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .session-header h3 {
+            margin: 0;
+            font-size: 1.1em;
+            color: #555;
+        }
+
+        .remove-btn {
+            background-color: #ef5350;
+            width: auto;
+            padding: 5px 10px;
+            margin-top: 0;
+            font-size: 12px;
+        }
+
+        .remove-btn:hover {
+            background-color: #d32f2f;
+        }
+
+        .add-btn {
+            background-color: #66bb6a;
+            margin-top: 10px;
+        }
+
+        .add-btn:hover {
+            background-color: #43a047;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Exam Scheduler</h1>
+        <form action="/configure" method="POST" enctype="multipart/form-data">
+            <label for="blocks_file">Blocks/Rooms Excel File (Col 1: Room No, Col 2: Capacity):</label>
+            <input type="file" id="blocks_file" name="blocks_file" accept=".xlsx, .xls" required>
+
+            <label for="supervisors_file">Supervisors Excel File (Col 1: Name):</label>
+            <input type="file" id="supervisors_file" name="supervisors_file" accept=".xlsx, .xls" required>
+
+            <button type="submit">Next: Configure Sessions</button>
+        </form>
+    </div>
+
+</body>
+
+</html>

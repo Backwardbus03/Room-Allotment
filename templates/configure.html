@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configure Sessions</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: #444;
+        }
+
+        .session-group {
+            border: 1px solid #eee;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 4px;
+            background-color: #fafafa;
+        }
+
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 8px 16px;
+            border-radius: 4px;
+            border: none;
+            font-size: 14px;
+        }
+
+        .add-btn {
+            background-color: #66bb6a;
+            color: white;
+            margin-top: 20px;
+            display: block;
+            width: 100%;
+            font-size: 16px;
+            padding: 12px;
+        }
+
+        .submit-btn {
+            background-color: #5c6bc0;
+            color: white;
+            margin-top: 20px;
+            display: block;
+            width: 100%;
+            font-size: 16px;
+            padding: 12px;
+        }
+
+        .remove-btn {
+            background-color: #ef5350;
+            color: white;
+        }
+
+        .supervisor-list {
+            max-height: 150px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: white;
+            margin-top: 5px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 5px;
+        }
+
+        .supervisor-item {
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>Configure Sessions</h1>
+        <form action="/generate" method="POST">
+            <!-- Hidden inputs to pass the Excel data forward -->
+            <input type="hidden" name="rooms_json" value="{{ rooms_json }}">
+            <input type="hidden" name="supervisors_json" value="{{ supervisors_json }}">
+
+            <div id="sessions-container">
+                <!-- Sessions will be added here -->
+            </div>
+
+            <button type="button" class="add-btn" onclick="addSession()">+ Add Session</button>
+            <button type="submit" class="submit-btn">Generate Schedule</button>
+        </form>
+    </div>
+
+    <script>
+        // Parse the supervisors list from Jinja to JS
+        const allSupervisors = JSON.parse('{{ supervisors_json | safe }}');
+        let sessionCount = 0;
+
+        function addSession() {
+            sessionCount++;
+            const container = document.getElementById('sessions-container');
+            const div = document.createElement('div');
+            div.className = 'session-group';
+            div.id = 'session-' + sessionCount;
+
+            // Generate Supervisor Checkboxes string
+            let checkboxes = '<div class="supervisor-list">';
+            allSupervisors.forEach(name => {
+                // We use name attribute like: unavailable_sessionID
+                checkboxes += `
+                <div class="supervisor-item">
+                    <input type="checkbox" name="unavailable_${sessionCount}" value="${name}">
+                    <label>${name}</label>
+                </div>
+            `;
+            });
+            checkboxes += '</div>';
+
+            div.innerHTML = `
+            <div class="session-header">
+                <h3>Session ${sessionCount}</h3>
+                <button type="button" class="remove-btn" onclick="removeSession(${sessionCount})">Remove</button>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <div style="flex: 1;">
+                    <label>Day:</label>
+                    <input type="number" name="day_${sessionCount}" required min="1" value="1" style="width: 60px;">
+                </div>
+                <div style="flex: 1;">
+                    <label>Session:</label>
+                    <select name="session_type_${sessionCount}">
+                        <option value="Morning">Morning</option>
+                        <option value="Evening">Evening</option>
+                    </select>
+                </div>
+                <div style="flex: 1;">
+                    <label>Students:</label>
+                    <input type="number" name="total_students_${sessionCount}" required min="1" style="width: 80px;">
+                </div>
+            </div>
+
+            <label><strong>Check Unavailable Supervisors:</strong></label>
+            ${checkboxes}
+            
+            <!-- Hidden tracker for session IDs so backend knows which to iterate -->
+            <input type="hidden" name="session_ids" value="${sessionCount}">
+        `;
+            container.appendChild(div);
+        }
+
+        function removeSession(id) {
+            const el = document.getElementById('session-' + id);
+            el.remove();
+            // Note: we don't remove the session ID from the submitted "session_ids" 
+            // if we just use getlist() for session_ids, but careful: 
+            // Removing the DOM element removes the inputs, so the "session_ids" input inside it is also removed.
+            // This works perfectly.
+        }
+
+        // Add initial session
+        window.onload = addSession;
+    </script>
+
+</body>
+
+</html>
