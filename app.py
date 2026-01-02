@@ -23,6 +23,105 @@ if not os.path.exists(app.config['UPLOAD_FOLDER']):
 
 # --- Helpers & Decorators ---
 
+def aggregate_schedule_rows(schedule_list):
+    """
+    Aggregates schedule rows with the same Supervisor, Date, Time, Block, and Role.
+    Combines 'Subject' and 'Count' into a single 'Subject' string.
+    """
+    if not schedule_list:
+        return []
+        
+    grouped = {}
+    
+    for row in schedule_list:
+        # Create a unique key for grouping
+        # tuple(Date, Time, Block, Role, Supervisor)
+        key = (
+            row.get('Date', ''),
+            row.get('Time', ''),
+            row.get('Block', ''),
+            row.get('Role', ''),
+            row.get('Supervisor', '')
+        )
+        
+        if key not in grouped:
+            grouped[key] = {
+                'Date': row.get('Date', ''),
+                'Time': row.get('Time', ''),
+                'Day': row.get('Day', ''),
+                'Session': row.get('Session', ''),
+                'Block': row.get('Block', ''),
+                'Role': row.get('Role', ''),
+                'Supervisor': row.get('Supervisor', ''),
+                'Subjects': []
+            }
+        
+        # Add subject info
+        subj = row.get('Subject', 'Unknown')
+        count = row.get('Count', 0)
+        grouped[key]['Subjects'].append(f"{subj} ({count})")
+
+    # Reconstruct list
+    aggregated_list = []
+    for key, data in grouped.items():
+        # Join subjects
+        data['Subject'] = ", ".join(data['Subjects'])
+        # Clean up temporary list
+        del data['Subjects']
+        aggregated_list.append(data)
+        
+    # Sort again for consistency
+    def sort_key(r):
+        return (r['Date'], r['Time'], r['Block'])
+    
+    aggregated_list.sort(key=sort_key)
+    
+    return aggregated_list
+
+def calculate_row_spans(schedule_list):
+    """
+    Calculates rowspan values for Date and Time columns.
+    Adds 'date_span' and 'time_span' to each row.
+    span > 0: Render cell with rowspan.
+    span == 0: Skip rendering cell.
+    """
+    if not schedule_list:
+        return []
+        
+    n = len(schedule_list)
+    i = 0
+    while i < n:
+        # 1. Calculate Date Span
+        date_val = schedule_list[i].get('Date', '')
+        j = i + 1
+        while j < n and schedule_list[j].get('Date', '') == date_val:
+            j += 1
+        
+        date_span = j - i
+        schedule_list[i]['date_span'] = date_span
+        for k in range(i + 1, j):
+            schedule_list[k]['date_span'] = 0
+            
+        # 2. Calculate Time Span (within this Date block)
+        # We need to sub-loop within the date block [i, j)
+        p = i
+        while p < j:
+            time_val = schedule_list[p].get('Time', '')
+            q = p + 1
+            while q < j and schedule_list[q].get('Time', '') == time_val:
+                q += 1
+            
+            time_span = q - p
+            schedule_list[p]['time_span'] = time_span
+            for k in range(p + 1, q):
+                schedule_list[k]['time_span'] = 0
+            
+            p = q # Move to next time block
+            
+        i = j # Move to next date block
+        
+    return schedule_list
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -140,30 +239,53 @@ def admin_dashboard():
             # Legacy sort for display
             sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
             
-            # 2. Schedule HTML Pivot
-            schedule_html = ""
-            try:
-                df = pd.DataFrame(schedule_data)
-                
-                # Create display value
-                display_role = df['Role'].apply(lambda x: "M" if "BLOCK" in str(x) else "B")
-                df['Display'] = df['Supervisor'] + " (" + display_role + ")"
-                
-                chart = df.pivot_table(
-                    index=['Day', 'Session'], 
-                    columns='Block', 
-                    values='Display', 
-                    aggfunc=lambda x: '<br>'.join(x)
-                ).fillna("-")
-                
-                schedule_html = chart.to_html(classes='table table-striped table-bordered text-center', border=0, escape=False)
-            except Exception as ex:
-                schedule_html = f"<p class='text-danger'>Chart unavailable: {str(ex)}</p>"
+            # Separate Main Allocations vs Backups/Relievers
+            main_allocations = []
+            backup_allocations = []
             
+            for row in schedule_data:
+                role = row.get('Role', '')
+                if 'BLOCK SUPERVISOR' in role:
+                    main_allocations.append(row)
+                else:
+                    backup_allocations.append(row)
+
+            # AGGREGATE ROWS FOR VIEW
+            main_allocations = aggregate_schedule_rows(main_allocations)
+            backup_allocations = aggregate_schedule_rows(backup_allocations)
+
+            # CALCULATE ROW SPANS
+            main_allocations = calculate_row_spans(main_allocations)
+            backup_allocations = calculate_row_spans(backup_allocations)
+
+            # 2. Schedule HTML Pivot (For Main only)
+            schedule_html = ""
+            if main_allocations:
+                try:
+                    df = pd.DataFrame(main_allocations)
+                    
+                    # Create display value
+                    df['Display'] = df['Supervisor']
+                    
+                    chart = df.pivot_table(
+                        index=['Day', 'Session'], 
+                        columns='Block', 
+                        values='Display', 
+                        aggfunc=lambda x: '<br>'.join(x)
+                    ).fillna("-")
+                    
+                    schedule_html = chart.to_html(classes='table table-striped table-bordered text-center', border=0, escape=False)
+                except Exception as ex:
+                    schedule_html = f"<p class='text-danger'>Chart unavailable: {str(ex)}</p>"
+            else:
+                 schedule_html = "<p>No main allocations found.</p>"
+
             return render_template('result.html', 
                                    duty_report=sorted_duties, 
                                    schedule_table=schedule_html, 
                                    schedule_data=schedule_data,
+                                   main_allocations=main_allocations,
+                                   backup_allocations=backup_allocations,
                                    exam_name=selected_exam,
                                    is_history=True)
                                    
@@ -312,20 +434,34 @@ def generate():
             }
             db.save_schedule(exam_name, input_snapshot, schedule_data)
         
-        # Prepare HTML for display
-        schedule_html = ""
+        # Separate Main Allocations vs Backups/Relievers
+        main_allocations = []
+        backup_allocations = []
+        
         if schedule_data:
-            df = pd.DataFrame(schedule_data)
-            try:
-                # Use pivot_table with custom aggregation to handle Main + Backup in same cell
-                # We want to display: "Name (Role) <br> Name (Role)"
-                def agg_supervisors(series):
-                    return "<br>".join(series)
+            for row in schedule_data:
+                role = row.get('Role', '')
+                if 'BLOCK SUPERVISOR' in role:
+                    main_allocations.append(row)
+                else:
+                    backup_allocations.append(row)
 
-                # Create display value
-                df['Display'] = df['Supervisor'] + " (" + df['Role'].apply(lambda x: "M" if "BLOCK" in x else "B") + ")"
-                
-                # Check for new columns Date/Time/Subject vs old Day/Session
+        # AGGREGATE ROWS FOR VIEW
+        main_allocations = aggregate_schedule_rows(main_allocations)
+        backup_allocations = aggregate_schedule_rows(backup_allocations)
+
+        # CALCULATE ROW SPANS
+        main_allocations = calculate_row_spans(main_allocations)
+        backup_allocations = calculate_row_spans(backup_allocations)
+
+        # Prepare HTML Pivot for Main Allocations Only
+        schedule_html = ""
+        if main_allocations:
+            df = pd.DataFrame(main_allocations)
+            try:
+                # Same pivot logic but only for Main
+                df['Display'] = df['Supervisor']
+                # Check columns
                 index_cols = ['Date', 'Time'] if 'Date' in df.columns else ['Day', 'Session']
                 
                 chart = df.pivot_table(
@@ -337,16 +473,19 @@ def generate():
                 
                 schedule_html = chart.to_html(classes='table table-striped table-bordered text-center', border=0, escape=False)
             except Exception as ex:
-                schedule_html = f"<p class='text-danger'>Note: Overview chart generation failed ({str(ex)}). Please refer to the detailed list below.</p>"
-            except Exception as ex:
-                schedule_html = f"<p class='text-danger'>Note: Overview chart generation failed ({str(ex)}). Please refer to the detailed list below.</p>"
+                schedule_html = f"<p class='text-danger'>Chart unavailable: {str(ex)}</p>"
         else:
-            schedule_html = "<p>No schedule data generated.</p>"
+            schedule_html = "<p>No main allocations generated.</p>"
 
         duty_counts = result['duties']
         sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
         
-        return render_template('result.html', duty_report=sorted_duties, schedule_table=schedule_html)
+        return render_template('result.html', 
+                               duty_report=sorted_duties, 
+                               schedule_table=schedule_html, 
+                               schedule_data=schedule_data,
+                               main_allocations=main_allocations,
+                               backup_allocations=backup_allocations)
 
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
@@ -498,7 +637,9 @@ def supervisor_dashboard():
     
     try:
         if selected_exam:
-            my_schedule = db.get_schedule_for_supervisor(selected_exam, name)
+            raw_sched = db.get_schedule_for_supervisor(selected_exam, name)
+            aggregated = aggregate_schedule_rows(raw_sched)
+            my_schedule = calculate_row_spans(aggregated)
     except Exception as e:
         flash(f"Error loading schedule: {e}")
             

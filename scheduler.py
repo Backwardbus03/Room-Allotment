@@ -89,6 +89,9 @@ def generate_schedule(rooms, supervisors, sessions_data):
                 print(f"  Room {r_name}: {data['used']} students ({len(data['sessions'])} subjects).")
     print("---------------------------------\n")
 
+    
+    import math
+
     # 3. DEFINE TASKS (Pass 2)
     tasks = []
     
@@ -97,8 +100,12 @@ def generate_schedule(rooms, supervisors, sessions_data):
     task_availability = {} 
     
     for slot_key, room_dict in slot_room_map.items():
+        active_rooms_in_slot = 0
+        slot_unavailable_supervisors = set() # For Relievers
+        
         for r_name, data in room_dict.items():
             if data['used'] == 0: continue
+            active_rooms_in_slot += 1
             
             # Combine unavailable lists from all sessions in this room
             combined_unavailable = set()
@@ -107,10 +114,10 @@ def generate_schedule(rooms, supervisors, sessions_data):
                 if s_obj:
                     combined_unavailable.update(s_obj.get('unavailable', []))
             
+            # Add to slot-wide unavailable (for relievers safety)
+            slot_unavailable_supervisors.update(combined_unavailable)
+
             candidates = [s for s in all_supervisors if s not in combined_unavailable]
-            
-            # Create Task ID ref (just use object id or tuple)
-            # We need to link back to the sessions to generate final output rows
             
             # 1. Main Task
             t_main = {
@@ -119,22 +126,54 @@ def generate_schedule(rooms, supervisors, sessions_data):
                 'block': r_name,
                 'role': 'MAIN',
                 'display_role': 'BLOCK SUPERVISOR',
-                'sessions': data['sessions'], # Link to subjects
+                'sessions': data['sessions'], 
                 'candidates': candidates
             }
             tasks.append(t_main)
             
-            # 2. Backup Task
-            t_backup = {
-                'id': str(uuid.uuid4()),
-                'slot': slot_key,
-                'block': r_name,
-                'role': 'BACKUP',
-                'display_role': 'BACKUP SUPERVISOR',
-                'sessions': data['sessions'],
-                'candidates': candidates
-            }
-            tasks.append(t_backup)
+            # 2. Conditional Room Backup (Only if students > 40)
+            if int(data['used']) > 40:
+                t_backup = {
+                    'id': str(uuid.uuid4()),
+                    'slot': slot_key,
+                    'block': r_name,
+                    'role': 'BACKUP_ROOM',
+                    'display_role': 'ROOM BACKUP',
+                    'sessions': data['sessions'],
+                    'candidates': candidates
+                }
+                tasks.append(t_backup)
+
+        # 3. Pool Backups (Relievers)
+        # 1 Reliever for every 5 rooms. Explicitly list the blocks they relieve.
+        if active_rooms_in_slot > 0:
+            # Collect all active room names for this slot
+            active_room_names = [r for r, d in room_dict.items() if d['used'] > 0]
+            
+            # Chunk into groups of 5
+            chunk_size = 5
+            for i in range(0, len(active_room_names), chunk_size):
+                chunk = active_room_names[i:i + chunk_size]
+                block_range = ", ".join(chunk)
+                
+                # Reliever candidates
+                reliever_candidates = [s for s in all_supervisors if s not in slot_unavailable_supervisors]
+                
+                t_reliever = {
+                    'id': str(uuid.uuid4()),
+                    'slot': slot_key,
+                    'block': block_range, # Specific blocks
+                    'role': 'BACKUP_RELIEVER',
+                    'display_role': 'RELIEVER', # Shortened for display
+                    'sessions': [{
+                        'date_disp': slot_key[0], 
+                        'time_disp': slot_key[1],
+                        'subject': 'Reliever for: ' + block_range,
+                        'count': 0
+                    }],
+                    'candidates': reliever_candidates
+                }
+                tasks.append(t_reliever)
 
     # 4. FAIRNESS & ASSIGNMENT
     total_tasks = len(tasks)

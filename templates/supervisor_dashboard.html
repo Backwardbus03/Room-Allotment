@@ -60,7 +60,7 @@
                         <tr>
                             <th class="ps-4">Date</th>
                             <th>Time</th>
-                            <th>Subject</th>
+                            <th>Subjects (Count)</th>
                             <th>Block</th>
                             <th class="pe-4">Role</th>
                         </tr>
@@ -68,8 +68,15 @@
                     <tbody>
                         {% for row in schedule %}
                         <tr>
-                            <td class="ps-4 fw-medium">{{ row.get('Date', row.get('Day', '')) }}</td>
-                            <td>{{ row.get('Time', row.get('Session', '')) }}</td>
+                            {% if row.date_span > 0 %}
+                            <td rowspan="{{ row.date_span }}" class="ps-4 fw-medium align-middle bg-white">{{
+                                row.get('Date', row.get('Day', '')) }}</td>
+                            {% endif %}
+
+                            {% if row.time_span > 0 %}
+                            <td rowspan="{{ row.time_span }}" class="align-middle bg-white">{{ row.get('Time',
+                                row.get('Session', '')) }}</td>
+                            {% endif %}
                             <td>{{ row.get('Subject', '-') }}</td>
                             <td class="font-monospace text-primary">{{ row.get('Block', '') }}</td>
                             <td class="pe-4">
