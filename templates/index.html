@@ -1,136 +1,101 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Exam Scheduler</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            background-color: #f4f4f9;
-        }
+{% block title %}Admin Dashboard - Exam Scheduler{% endblock %}
 
-        .dashboard-container {
-            max-width: 1000px;
-            margin: 30px auto;
-        }
-
-        .card {
-            border: none;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-            margin-bottom: 20px;
-        }
-
-        .card-header {
-            background-color: white;
-            border-bottom: 2px solid #f0f0f0;
-            padding: 15px 20px;
-        }
-
-        .card-header h5 {
-            margin: 0;
-            color: #444;
-            font-weight: 600;
-        }
-    </style>
-</head>
-
-<body>
-
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="#">Exam Scheduler Admin</a>
-            <div class="d-flex">
-                <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
-        </div>
-    </nav>
-
-    <div class="dashboard-container container">
-
-        <div class="row">
-            <!-- Create New Schedule Section -->
-            <div class="col-md-5">
-                <div class="card">
-                    <div class="card-header">
-                        <h5>Create New Schedule</h5>
-                    </div>
-                    <div class="card-body">
-                        <p class="text-muted small">Upload configuration files to start a new session planning.</p>
-                        <form action="/configure" method="POST" enctype="multipart/form-data">
-                            <div class="mb-3">
-                                <label for="blocks_file" class="form-label">Blocks/Rooms Excel</label>
-                                <input class="form-control" type="file" id="blocks_file" name="blocks_file"
-                                    accept=".xlsx, .xls" required>
-                                <div class="form-text">Cols: Room No, Capacity</div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="supervisors_file" class="form-label">Supervisors Excel</label>
-                                <input class="form-control" type="file" id="supervisors_file" name="supervisors_file"
-                                    accept=".xlsx, .xls" required>
-                                <div class="form-text">Cols: Name</div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="timetable_pdf" class="form-label">Timetable PDF (Optional)</label>
-                                <input class="form-control" type="file" id="timetable_pdf" name="timetable_pdf"
-                                    accept=".pdf">
-                                <div class="form-text">Auto-extracts Date, Time, and Subject</div>
-                            </div>
-
-                            <button type="submit" class="btn btn-success w-100">Proceed to Configure &rarr;</button>
-                        </form>
-                    </div>
+{% block content %}
+<div class="container">
+    <div class="row g-4">
+        <!-- New Schedule Card -->
+        <div class="col-md-5">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom-0 pb-0 pt-4">
+                    <h5 class="card-title fw-bold text-primary mb-0">Create New Schedule</h5>
                 </div>
-            </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-4">Upload your configuration files to begin planning a new exam
+                        session.</p>
 
-            <!-- Existing Schedules Section -->
-            <div class="col-md-7">
-                <div class="card">
-                    <div class="card-header">
-                        <h5>Existing Generated Schedules</h5>
-                    </div>
-                    <div class="card-body">
-                        {% if exams %}
-                        <div class="table-responsive">
-                            <table class="table table-hover align-middle">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Exam Name</th>
-                                        <th>Created Date</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for exam in exams %}
-                                    <tr>
-                                        <td class="fw-bold">{{ exam.name }}</td>
-                                        <td class="small text-muted">{{ exam.date.strftime('%Y-%m-%d %H:%M') if
-                                            exam.date else 'N/A' }}</td>
-                                        <td>
-                                            <a href="{{ url_for('admin_dashboard', exam_name=exam.name) }}"
-                                                class="btn btn-sm btn-primary">View</a>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
+                    <form action="/configure" method="POST" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="blocks_file" class="form-label fw-medium">Blocks/Rooms Excel</label>
+                            <input class="form-control" type="file" id="blocks_file" name="blocks_file"
+                                accept=".xlsx, .xls" required>
+                            <div class="form-text text-xs">Required columns: Room No, Capacity</div>
                         </div>
-                        {% else %}
-                        <div class="text-center py-5 text-muted">
-                            <p>No schedules generated yet.</p>
+
+                        <div class="mb-3">
+                            <label for="supervisors_file" class="form-label fw-medium">Supervisors Excel</label>
+                            <input class="form-control" type="file" id="supervisors_file" name="supervisors_file"
+                                accept=".xlsx, .xls" required>
+                            <div class="form-text text-xs">Required columns: Name</div>
                         </div>
-                        {% endif %}
-                    </div>
+
+                        <div class="mb-4">
+                            <label for="timetable_pdf" class="form-label fw-medium">Timetable PDF <span
+                                    class="text-muted fw-normal">(Optional)</span></label>
+                            <input class="form-control" type="file" id="timetable_pdf" name="timetable_pdf"
+                                accept=".pdf">
+                            <div class="form-text text-xs">Auto-extracts Date, Time, and Subject</div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-100 py-2">
+                            Proceed to Configure <span class="ms-1">&rarr;</span>
+                        </button>
+                    </form>
                 </div>
             </div>
         </div>
 
+        <!-- Existing Schedules Card -->
+        <div class="col-md-7">
+            <div class="card h-100 border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom-0 pb-0 pt-4">
+                    <h5 class="card-title fw-bold text-secondary mb-0">Generated Schedules</h5>
+                </div>
+                <div class="card-body">
+                    {% if exams %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light small text-uppercase text-muted">
+                                <tr>
+                                    <th class="border-0 ps-3">Exam Name</th>
+                                    <th class="border-0">Created Date</th>
+                                    <th class="border-0 text-end pe-3">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for exam in exams %}
+                                <tr>
+                                    <td class="ps-3 fw-medium text-dark">{{ exam.name }}</td>
+                                    <td class="small text-muted">{{ exam.date.strftime('%Y-%m-%d %H:%M') if exam.date
+                                        else 'N/A' }}</td>
+                                    <td class="text-end pe-3">
+                                        <a href="{{ url_for('admin_dashboard', exam_name=exam.name) }}"
+                                            class="btn btn-sm btn-outline-primary">View</a>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="text-center py-5">
+                        <div class="mb-3 text-muted">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="currentColor"
+                                class="bi bi-calendar-x" viewBox="0 0 16 16">
+                                <path
+                                    d="M6.146 7.146a.5.5 0 0 1 .708 0L8 8.293l1.146-1.147a.5.5 0 1 1 .708.708L8.707 9l1.147 1.146a.5.5 0 0 1-.708.708L8 9.707l-1.146 1.147a.5.5 0 0 1-.708-.708L7.293 9 6.146 7.854a.5.5 0 0 1 0-.708z" />
+                                <path
+                                    d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM1 4v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4H1z" />
+                            </svg>
+                        </div>
+                        <h6 class="text-muted">No schedules found</h6>
+                        <p class="small text-muted mb-0">Use the form to create your first exam schedule.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-
-</html>
+</div>
+{% endblock %}

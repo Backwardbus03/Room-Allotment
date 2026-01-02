@@ -6,3 +6,4 @@ supabase
 psycopg2
 pdfplumber
 PyMuPDF
+reportlab

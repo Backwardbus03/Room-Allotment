@@ -197,6 +197,7 @@ def generate_schedule(rooms, supervisors, sessions_data):
                 "Date": sess_info['date_disp'],
                 "Time": sess_info['time_disp'],
                 "Subject": sess_info['subject'],
+                "Count": sess_info.get('count', 0),
                 "Block": task['block'],
                 "Role": task['display_role'],
                 "Supervisor": chosen_sup

@@ -1,409 +1,249 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Configure Sessions</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f4f9;
-            color: #333;
-            padding: 20px;
-        }
+{% block title %}Configure Sessions - Exam Scheduler{% endblock %}
 
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            width: 100%;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        h1,
-        h2 {
-            text-align: center;
-            color: #444;
-        }
-
-        h2 {
-            font-size: 1.2rem;
-            margin-top: 20px;
-            margin-bottom: 15px;
-            text-align: left;
-            border-bottom: 2px solid #eee;
-            padding-bottom: 5px;
-        }
-
-        /* --- Entry Section --- */
-        .entry-section {
-            background-color: #fafafa;
-            padding: 20px;
-            border-radius: 6px;
-            border: 1px solid #eee;
-            margin-bottom: 20px;
-        }
-
-        .form-row {
-            display: flex;
-            gap: 20px;
-            margin-bottom: 15px;
-            flex-wrap: wrap;
-        }
-
-        .form-group {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-width: 150px;
-        }
-
-        .form-group label {
-            margin-bottom: 5px;
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-
-        .form-group input,
-        .form-group select {
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-
-        .supervisor-list {
-            max-height: 150px;
-            overflow-y: auto;
-            border: 1px solid #ddd;
-            padding: 10px;
-            background: white;
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 5px;
-            border-radius: 4px;
-        }
-
-        .supervisor-item {
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            user-select: none;
-        }
-
-        /* --- Button Styles --- */
-        button {
-            cursor: pointer;
-            padding: 10px 20px;
-            border-radius: 4px;
-            border: none;
-            font-size: 14px;
-            font-weight: 600;
-            transition: opacity 0.2s;
-        }
-
-        button:hover {
-            opacity: 0.9;
-        }
-
-        .add-btn {
-            background-color: #66bb6a;
-            color: white;
-            width: 100%;
-            margin-top: 10px;
-        }
-
-        .submit-btn {
-            background-color: #5c6bc0;
-            color: white;
-            margin-top: 30px;
-            display: block;
-            width: 100%;
-            font-size: 16px;
-            padding: 15px;
-        }
-
-        .remove-btn {
-            background-color: #ef5350;
-            color: white;
-            padding: 5px 10px;
-            font-size: 12px;
-        }
-
-        /* --- Table Styles --- */
-        .table-container {
-            margin-top: 10px;
-            overflow-x: auto;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-
-        th,
-        td {
-            text-align: left;
-            padding: 10px;
-            border-bottom: 1px solid #eee;
-        }
-
-        th {
-            background-color: #f8f9fa;
-            color: #555;
-            font-weight: 600;
-        }
-
-        .unavailable-cell {
-            font-size: 0.85rem;
-            color: #666;
-            max-width: 250px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .flash-msg {
-            background: #e8f5e9;
-            color: #2e7d32;
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 4px;
-            text-align: center;
-        }
-    </style>
-    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
-</head>
-
-<body>
-
-    <div class="container">
-        <h1>Configure Sessions</h1>
-
-        {% with messages = get_flashed_messages() %}
-        {% if messages %}
-        {% for message in messages %}
-        <div class="flash-msg">{{ message }}</div>
-        {% endfor %}
-        {% endif %}
-        {% endwith %}
-
-        <!-- Entry Form Section -->
-        <div class="entry-section">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="input-date">Date</label>
-                    <input type="text" id="input-date" placeholder="e.g. 06 November 2025">
-                </div>
-                <div class="form-group">
-                    <label for="input-time">Time Slot</label>
-                    <input type="text" id="input-time" placeholder="e.g. 11.15 am to 01.15 pm">
-                </div>
-                <div class="form-group" style="flex: 2;">
-                    <label for="input-subject">Subject</label>
-                    <input type="text" id="input-subject" placeholder="e.g. Introduction to Bio...">
-                </div>
-                <div class="form-group">
-                    <label for="input-students">Total Students</label>
-                    <input type="number" id="input-students" min="1" placeholder="e.g. 50">
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label for="unavailable-select">Unavailable Supervisors (for this specific session):</label>
-                <select id="unavailable-select" multiple placeholder="Select unavailable supervisors..."
-                    autocomplete="off">
-                    <!-- JS will populate this -->
-                </select>
-            </div>
-
-            <button type="button" class="add-btn" onclick="addSessionRowFromInput()">+ Add Session to List</button>
-        </div>
-
-        <!-- List Section -->
-        <h2>Sessions to Schedule</h2>
-        <div class="table-container">
-            <table id="sessions-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Date</th>
-                        <th>Time</th>
-                        <th>Subject</th>
-                        <th>Students</th>
-                        <th>Unavailable Supervisors</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr id="empty-row">
-                        <td colspan="7" class="empty-state" style="text-align:center; padding:20px; color:#999;">No
-                            sessions added yet.</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-
-        <form action="/generate" method="POST" id="main-form">
-            <input type="hidden" name="rooms_json" value="{{ rooms_json }}">
-            <input type="hidden" name="supervisors_json" value="{{ supervisors_json }}">
-
-            <div
-                style="margin-top: 30px; margin-bottom: 20px; background: #e8f5e9; padding: 15px; border-radius: 5px; border: 1px solid #c8e6c9;">
-                <label for="exam_name" style="font-weight: bold; display: block; margin-bottom: 5px;">Exam Name /
-                    Title:</label>
-                <input type="text" id="exam_name" name="exam_name" required placeholder="e.g. End Semester Exam 2024"
-                    style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px;">
-            </div>
-
-            <div id="hidden-inputs-container"></div>
-
-            <button type="submit" class="submit-btn" onclick="return validateForm()">Generate Schedule</button>
-        </form>
+{% block content %}
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="h3 mb-0 text-gray-800">Configure Sessions</h2>
     </div>
 
-    <script>
-        // supervisors_json and preloaded_sessions are already JSON strings from backend
-        const allSupervisors = {{ supervisors_json | safe }};
-        const preloadedSessions = {{ preloaded_sessions | safe }};
+    <!-- Entry Form Card -->
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-header bg-white py-3">
+            <h5 class="m-0 font-weight-bold text-primary">Add New Session</h5>
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label for="input-date" class="form-label fw-bold small text-muted">Date</label>
+                    <input type="date" id="input-date" class="form-control">
+                </div>
+                <div class="col-md-2">
+                    <label for="input-start-time" class="form-label fw-bold small text-muted">Start Time</label>
+                    <input type="time" id="input-start-time" class="form-control">
+                </div>
+                <div class="col-md-2">
+                    <label for="input-end-time" class="form-label fw-bold small text-muted">End Time</label>
+                    <input type="time" id="input-end-time" class="form-control">
+                </div>
+                <div class="col-md-3">
+                    <label for="input-subject" class="form-label fw-bold small text-muted">Subject</label>
+                    <input type="text" id="input-subject" class="form-control" placeholder="e.g. Intro to Bio">
+                </div>
+                <div class="col-md-2">
+                    <label for="input-students" class="form-label fw-bold small text-muted">Students</label>
+                    <input type="number" id="input-students" class="form-control" min="1" placeholder="e.g. 50">
+                </div>
+            </div>
 
-        let sessionCounter = 0;
-        let rowCount = 0;
-
-        let supervisorSelect;
-
-        function initSupervisorList() {
-            const selectEl = document.getElementById('unavailable-select');
-            let optionsHtml = '';
-            allSupervisors.forEach((name) => {
-                optionsHtml += `<option value="${name}">${name}</option>`;
-            });
-            selectEl.innerHTML = optionsHtml;
-
-            // Initialize Tom Select
-            supervisorSelect = new TomSelect('#unavailable-select', {
-                plugins: ['remove_button'],
-                create: false,
-                maxItems: null,
-                valueField: 'value',
-                labelField: 'text',
-                searchField: 'text',
-                placeholder: 'Search and select supervisors...',
-            });
-        }
-
-        function addSessionRow(date, time, subject, students, unavailable) {
-            sessionCounter++;
-            rowCount++;
-            const currentId = sessionCounter; // Capture for closure
-            const hiddenContainer = document.getElementById('hidden-inputs-container');
-
-            // --- Hidden Inputs for Backend ---
-            const div = document.createElement('div');
-            div.id = `hidden-session-${currentId}`;
-
-            function createHidden(name, val) {
-                const i = document.createElement('input');
-                i.type = 'hidden';
-                i.name = name;
-                i.value = val;
-                return i;
-            }
-
-            // Legacy IDs for app compatibility
-            div.appendChild(createHidden('session_ids', currentId));
-            div.appendChild(createHidden(`day_${currentId}`, '0'));
-            div.appendChild(createHidden(`session_type_${currentId}`, 'Default'));
-
-            // New Fields
-            div.appendChild(createHidden(`date_${currentId}`, date));
-            div.appendChild(createHidden(`time_${currentId}`, time));
-            div.appendChild(createHidden(`subject_${currentId}`, subject));
-            div.appendChild(createHidden(`total_students_${currentId}`, students));
-
-            // Initial Unavailable Inputs
-            unavailable.forEach(name => {
-                div.appendChild(createHidden(`unavailable_${currentId}`, name));
-            });
-
-            hiddenContainer.appendChild(div);
-
-            // --- Table UI ---
-            const tbody = document.querySelector('#sessions-table tbody');
-            const emptyRow = document.getElementById('empty-row');
-            if (emptyRow) emptyRow.remove();
-
-            const tr = document.createElement('tr');
-            tr.id = `row-${currentId}`;
-
-            // Build Options for Select
-            const options = allSupervisors.map(name => {
-                const selected = unavailable.includes(name) ? 'selected' : '';
-                return `<option value="${name}" ${selected}>${name}</option>`;
-            }).join('');
-
-            tr.innerHTML = `
-                <td>${rowCount}</td>
-                <td>${date}</td>
-                <td>${time}</td>
-                <td>${subject}</td>
-                <td><input type="number" value="${students}" min="1" style="width:60px" onchange="updateStudents(${currentId}, this.value)"></td> 
-                <td style="min-width: 250px;">
-                    <select id="select-row-${currentId}" multiple placeholder="Select unavailable..." autocomplete="off">
-                        ${options}
+            <div class="row mt-3">
+                <div class="col-12">
+                    <label for="unavailable-select" class="form-label fw-bold small text-muted">Unavailable Supervisors
+                        (for this specific session)</label>
+                    <select id="unavailable-select" multiple placeholder="Select unavailable supervisors..."
+                        autocomplete="off">
+                        <!-- JS will populate this -->
                     </select>
-                </td>
-                <td><button type="button" class="remove-btn" onclick="removeSession(${currentId})">Remove</button></td>
-            `;
-            tbody.appendChild(tr);
+                </div>
+            </div>
 
-            // Initialize Tom Select for this Row
-            const ts = new TomSelect(`#select-row-${currentId}`, {
-                plugins: ['remove_button'],
-                create: false,
-                maxItems: null,
-                valueField: 'value',
-                labelField: 'text',
-                searchField: 'text',
-                placeholder: 'Select unavailable...',
-                onDelete: function (values) {
-                    return confirm(values.length > 1 ? 'Are you sure you want to remove these ' + values.length + ' items?' : 'Are you sure you want to remove "' + values[0] + '"?');
-                }
-            });
+            <div class="mt-4">
+                <button type="button" class="btn btn-success px-4" onclick="addSessionRowFromInput()">
+                    <i class="bi bi-plus-circle me-1"></i> Add Session to List
+                </button>
+            </div>
+        </div>
+    </div>
 
-            // Override onDelete to not annoy user, or just remove custom onDelete if standard behavior is fine. 
-            // Actually, let's stick to standard behavior for speed, removing the onDelete callback above.
-            // Re-initializing without the confirm for smoother UX.
-            ts.destroy();
-            const newTs = new TomSelect(`#select-row-${currentId}`, {
-                plugins: ['remove_button'],
-                create: false,
-                maxItems: null,
-                valueField: 'value',
-                labelField: 'text',
-                searchField: 'text',
-                placeholder: 'Select unavailable...',
-                onChange: function (values) {
-                    updateUnavailableHidden(currentId, values);
-                }
-            });
+    <!-- Sessions List Card -->
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white py-3">
+            <h5 class="m-0 font-weight-bold text-secondary">Sessions to Schedule</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0" id="sessions-table">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-4">#</th>
+                            <th>Date</th>
+                            <th>Time</th>
+                            <th>Subject</th>
+                            <th>Students</th>
+                            <th style="width: 30%;">Unavailable Supervisors</th>
+                            <th class="text-end pe-4">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr id="empty-row">
+                            <td colspan="7" class="text-center py-5 text-muted">
+                                <div class="mb-2"><i class="bi bi-list-task fs-3"></i></div>
+                                No sessions added yet. Use the form above to add one.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Final Form -->
+    <form action="/generate" method="POST" id="main-form" class="mt-4">
+        <input type="hidden" name="rooms_json" value="{{ rooms_json }}">
+        <input type="hidden" name="supervisors_json" value="{{ supervisors_json }}">
+
+        <div class="alert alert-light border shadow-sm d-flex align-items-center p-4">
+            <div class="flex-grow-1 me-4">
+                <label for="exam_name" class="form-label fw-bold fs-5 mb-1">Exam Name / Title</label>
+                <input type="text" id="exam_name" name="exam_name" required placeholder="e.g. End Semester Exam 2024"
+                    class="form-control form-control-lg">
+            </div>
+            <div>
+                <button type="submit" class="btn btn-primary btn-lg shadow-sm" onclick="return validateForm()">
+                    <i class="bi bi-lightning-charge-fill me-2"></i>Generate Schedule
+                </button>
+            </div>
+        </div>
+
+        <div id="hidden-inputs-container"></div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // supervisors_json and preloaded_sessions are already JSON strings from backend
+    const allSupervisors = {{ supervisors_json | safe }};
+    const preloadedSessions = {{ preloaded_sessions | safe }};
+
+    let sessionCounter = 0;
+    let rowCount = 0;
+
+    let supervisorSelect;
+
+    function initSupervisorList() {
+        // Initialize Tom Select for the input form
+        supervisorSelect = new TomSelect('#unavailable-select', {
+            plugins: ['remove_button'],
+            create: false,
+            maxItems: null,
+            valueField: 'value',
+            labelField: 'text',
+            searchField: 'text',
+            placeholder: 'Search and select supervisors...',
+        });
+
+        // Populate options
+        allSupervisors.forEach((name) => {
+            supervisorSelect.addOption({ value: name, text: name });
+        });
+        supervisorSelect.refreshOptions(false); // Make sure options are rendered
+    }
+
+    function addSessionRow(date, startTime, endTime, subject, students, unavailable) {
+        sessionCounter++;
+        rowCount++;
+        const currentId = sessionCounter; // Capture for closure
+        const hiddenContainer = document.getElementById('hidden-inputs-container');
+
+        // --- Hidden Inputs for Backend ---
+        const div = document.createElement('div');
+        div.id = `hidden-session-${currentId}`;
+
+        function createHidden(name, val) {
+            const i = document.createElement('input');
+            i.type = 'hidden';
+            i.name = name;
+            i.value = val;
+            return i;
         }
 
-        function updateUnavailableHidden(sid, values) {
-            const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
-            if (!hiddenDiv) return;
+        // Legacy IDs for app compatibility
+        div.appendChild(createHidden('session_ids', currentId));
+        div.appendChild(createHidden(`day_${currentId}`, '0'));
+        div.appendChild(createHidden(`session_type_${currentId}`, `${startTime}-${endTime}`));
 
-            // Remove existing unavailable inputs
-            const existing = hiddenDiv.querySelectorAll(`input[name="unavailable_${sid}"]`);
-            existing.forEach(el => el.remove());
+        // New Fields
+        div.appendChild(createHidden(`date_${currentId}`, date));
+        div.appendChild(createHidden(`start_time_${currentId}`, startTime));
+        div.appendChild(createHidden(`end_time_${currentId}`, endTime));
+        div.appendChild(createHidden(`subject_${currentId}`, subject));
+        div.appendChild(createHidden(`total_students_${currentId}`, students));
 
-            // Add new ones
+        // Initial Unavailable Inputs
+        unavailable.forEach(name => {
+            div.appendChild(createHidden(`unavailable_${currentId}`, name));
+        });
+
+        hiddenContainer.appendChild(div);
+
+        // --- Table UI ---
+        const tbody = document.querySelector('#sessions-table tbody');
+        const emptyRow = document.getElementById('empty-row');
+        if (emptyRow) emptyRow.remove();
+
+        const tr = document.createElement('tr');
+        tr.id = `row-${currentId}`;
+
+        // Build Options string for innerHTML is tricky with loop, 
+        // easier to let TomSelect handle it after rendering, but we need initial <select>
+        // We will just put the supervisors name in value attribute and init TomSelect
+
+        // However, for the initial HTML render, we need valid options for the library to pick up
+        // OR we can just init an empty select and add options via API like above.
+        // Let's stick to generating options string as it is robust for pre-selected values.
+
+        const optionsHtml = allSupervisors.map(name => {
+            const selected = unavailable.includes(name) ? 'selected' : '';
+            return `<option value="${name}" ${selected}>${name}</option>`;
+        }).join('');
+
+        tr.innerHTML = `
+            <td class="align-middle ps-4">${rowCount}</td>
+            <td class="align-middle">${date}</td>
+            <td class="align-middle">${startTime} - ${endTime}</td>
+            <td class="align-middle fw-medium">${subject}</td>
+            <td class="align-middle">
+                <input type="number" class="form-control form-control-sm" value="${students}" min="1" style="width: 80px" onchange="updateStudents(${currentId}, this.value)">
+            </td> 
+            <td class="align-middle">
+                <select id="select-row-${currentId}" multiple placeholder="Select unavailable..." autocomplete="off">
+                    ${optionsHtml}
+                </select>
+            </td>
+            <td class="align-middle text-end pe-4">
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeSession(${currentId})">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+
+        const newTs = new TomSelect(`#select-row-${currentId}`, {
+            plugins: ['remove_button'],
+            create: false,
+            maxItems: null,
+            valueField: 'value',
+            labelField: 'text',
+            searchField: 'text',
+            placeholder: 'Select unavailable...',
+            onChange: function (values) {
+                updateUnavailableHidden(currentId, values);
+            }
+        });
+    }
+
+    function updateUnavailableHidden(sid, values) {
+        const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
+        if (!hiddenDiv) return;
+
+        // Remove existing unavailable inputs
+        const existing = hiddenDiv.querySelectorAll(`input[name="unavailable_${sid}"]`);
+        existing.forEach(el => el.remove());
+
+        // Add new ones
+        if (values) {
             values.forEach(name => {
                 const i = document.createElement('input');
                 i.type = 'hidden';
@@ -412,67 +252,71 @@
                 hiddenDiv.appendChild(i);
             });
         }
+    }
 
-        function updateStudents(sid, val) {
-            const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
-            if (hiddenDiv) {
-                const input = hiddenDiv.querySelector(`input[name="total_students_${sid}"]`);
-                if (input) input.value = val;
-            }
+    function updateStudents(sid, val) {
+        const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
+        if (hiddenDiv) {
+            const input = hiddenDiv.querySelector(`input[name="total_students_${sid}"]`);
+            if (input) input.value = val;
+        }
+    }
+
+    function addSessionRowFromInput() {
+        const date = document.getElementById('input-date').value;
+        const startTime = document.getElementById('input-start-time').value;
+        const endTime = document.getElementById('input-end-time').value;
+        const subject = document.getElementById('input-subject').value;
+        const students = document.getElementById('input-students').value;
+
+        if (!date || !startTime || !endTime || !students) {
+            alert("Please fill required fields (Date, Start/End Time, Students).");
+            return;
         }
 
-        function addSessionRowFromInput() {
-            const date = document.getElementById('input-date').value;
-            const time = document.getElementById('input-time').value;
-            const subject = document.getElementById('input-subject').value;
-            const students = document.getElementById('input-students').value;
+        // Get values from Tom Select
+        const unavailable = supervisorSelect.getValue(); // returns array of values
 
-            if (!date || !time || !students) {
-                alert("Please fill required fields (Date, Time, Students).");
-                return;
-            }
+        addSessionRow(date, startTime, endTime, subject, students, unavailable);
 
-            // Get values from Tom Select
-            const unavailable = supervisorSelect.getValue(); // returns array of values
+        // Reset inputs
+        // document.getElementById('input-date').value = ''; // Keep date/time as often they are same
+        document.getElementById('input-subject').value = '';
+        document.getElementById('input-students').value = '';
+        supervisorSelect.clear();
+    }
 
-            addSessionRow(date, time, subject, students, unavailable);
-
-            // Reset
-            document.getElementById('input-students').value = '';
-            document.getElementById('input-subject').value = '';
-            supervisorSelect.clear();
+    function removeSession(id) {
+        document.getElementById(`hidden-session-${id}`).remove();
+        document.getElementById(`row-${id}`).remove();
+        const tbody = document.querySelector('#sessions-table tbody');
+        // Check if there are any TRs left (excluding empty-row if it was there, but it should be gone)
+        // Actually better to check rowCount or valid rows
+        if (tbody.querySelectorAll('tr').length === 0) {
+            tbody.innerHTML = '<tr id="empty-row"><td colspan="7" class="text-center py-5 text-muted">No sessions added yet.</td></tr>';
+            rowCount = 0; // Soft reset, though indexes will keep incrementing which is fine for unique IDs
         }
+    }
 
-        function removeSession(id) {
-            document.getElementById(`hidden-session-${id}`).remove();
-            document.getElementById(`row-${id}`).remove();
-            const tbody = document.querySelector('#sessions-table tbody');
-            if (tbody.children.length === 0) {
-                tbody.innerHTML = '<tr id="empty-row"><td colspan="7" class="empty-state" style="text-align:center">No sessions added yet.</td></tr>';
-                rowCount = 0;
-            }
+    function validateForm() {
+        const tbody = document.querySelector('#sessions-table tbody');
+        // If empty row exists or no rows
+        if (document.getElementById('empty-row') || tbody.children.length === 0) {
+            alert("Please add at least one session configuration.");
+            return false;
         }
+        return true;
+    }
 
-        function validateForm() {
-            if (rowCount === 0) {
-                alert("Please add sessions.");
-                return false;
-            }
-            return true;
+    window.onload = function () {
+        initSupervisorList();
+
+        // Auto-load sessions
+        if (preloadedSessions && preloadedSessions.length > 0) {
+            preloadedSessions.forEach(sess => {
+                addSessionRow(sess.date, sess.start_time, sess.end_time, sess.subject, 50, []);
+            });
         }
-
-        window.onload = function () {
-            initSupervisorList();
-
-            // Auto-load sessions
-            if (preloadedSessions && preloadedSessions.length > 0) {
-                preloadedSessions.forEach(sess => {
-                    // Default students to 50 if not known, let user edit
-                    addSessionRow(sess.date, sess.time, sess.subject, 50, []);
-                });
-            }
-        };
-    </script>
-</body>
-
-</html>
+    };
+</script>
+{% endblock %}

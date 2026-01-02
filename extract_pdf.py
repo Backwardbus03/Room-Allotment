@@ -1,17 +1,104 @@
+
 import pdfplumber
 import pandas as pd
+import re
+from datetime import datetime
+
+def normalize_date(date_str):
+    """
+    Parses date strings like '02/02/2026' or '06 November 2025'
+    Returns 'YYYY-MM-DD' for HTML input type='date'
+    """
+    date_str = date_str.strip()
+    # Try DD/MM/YYYY
+    try:
+        dt = datetime.strptime(date_str, "%d/%m/%Y")
+        return dt.strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+        
+    # Try DD Month YYYY
+    try:
+        dt = datetime.strptime(date_str, "%d %B %Y")
+        return dt.strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+    
+    # Return original if parsing fails (fallback)
+    return date_str
+
+def normalize_time_range(time_str):
+    """
+    Parses time strings like '10.15 a.m. to 11.00 a.m.'
+    Returns tuple ('HH:MM', 'HH:MM') for start and end times (24-hour).
+    Returns (None, None) if parsing fails.
+    """
+    time_str = time_str.strip().lower()
+    time_str = time_str.replace("a.m.", "am").replace("p.m.", "pm")
+    time_str = time_str.replace("noon", "12:00 pm")
+    
+    # Regex to capture all time occurrences
+    # Matches: 10.15, 10:15, 1, 12, optionally am/pm
+    pattern = r'(\d{1,2})[.:]?(\d{2})?\s?(am|pm)?'
+    matches = list(re.finditer(pattern, time_str))
+    
+    if len(matches) < 2:
+        # Maybe just one time found? Try to fallback or return single
+        if len(matches) == 1:
+            return convert_match_to_24h(matches[0], time_str), ""
+        return "", ""
+        
+    start_match = matches[0]
+    end_match = matches[1]
+    
+    start_time = convert_match_to_24h(start_match, time_str, is_end=False)
+    end_time = convert_match_to_24h(end_match, time_str[start_match.end():], is_end=True)
+    
+    return start_time, end_time
+
+def convert_match_to_24h(match, context_str, is_end=False):
+    hour = int(match.group(1))
+    minute = int(match.group(2)) if match.group(2) else 0
+    meridiem = match.group(3)
+    
+    # Heuristic for missing meridiem
+    if not meridiem:
+        # If it's the start time and there's a later 'pm', assume 'am' if hour < 12?
+        # Or look ahead in context
+        if "pm" in context_str and "am" not in context_str[:10]: 
+            # If context has pm and we are looking at something before it, it might be am/pm?
+            # It's tricky. 
+            pass
+            
+    # Simple logic: if < 7, likely PM (exams don't start at 1 AM). if >= 7 and < 12, likely AM.
+    # 12 is PM usually unless 12 am (midnight).
+    
+    # Better: Use the raw string check
+    if not meridiem:
+        if "pm" in context_str: meridiem = "pm"
+        elif "am" in context_str: meridiem = "am"
+    
+    if not meridiem:
+        # Fallback Logic
+        if hour < 7: meridiem = 'pm'
+        else: meridiem = 'am'
+
+    if meridiem == 'pm' and hour != 12:
+        hour += 12
+    if meridiem == 'am' and hour == 12:
+        hour = 0
+        
+    return f"{hour:02d}:{minute:02d}"
 
 def extract_sessions_from_pdf(pdf_path):
     """
     Extracts session data from the PDF.
-    Supports:
-    1. Legacy Format: Col 0=Date, Col 1=Time, Col 5=Subject
-    2. Multi-Stream Format: Header with DATE, TIME, and Stream Codes (INFT, CMPN, etc.)
     """
     sessions = []
     
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
+            # ... (Existing table extraction logic same as before, just calling new function)
             tables = page.extract_tables()
             for table in tables:
                 if not table: continue
@@ -20,9 +107,7 @@ def extract_sessions_from_pdf(pdf_path):
                 header_row = None
                 header_idx = -1
                 
-                # Scan first 5 rows for header
                 for idx, row in enumerate(table[:5]):
-                    # Upper case and strip
                     row_texts = [str(c).upper().strip() if c else "" for c in row]
                     if "DATE" in row_texts and "TIME" in row_texts:
                         header_row = row_texts
@@ -34,7 +119,6 @@ def extract_sessions_from_pdf(pdf_path):
                         date_col_idx = header_row.index("DATE")
                         time_col_idx = header_row.index("TIME")
                         
-                        # Identify Subject Columns
                         subject_cols = []
                         for c_idx, col_name in enumerate(header_row):
                             if c_idx not in [date_col_idx, time_col_idx] and col_name and "DAY" not in col_name:
@@ -42,7 +126,6 @@ def extract_sessions_from_pdf(pdf_path):
                         
                         current_date = None
                         
-                        # Iterate Data Rows
                         for row_idx in range(header_idx + 1, len(table)):
                             row = table[row_idx]
                             row = [str(cell).strip() if cell else "" for cell in row]
@@ -52,67 +135,56 @@ def extract_sessions_from_pdf(pdf_path):
                             date_val = row[date_col_idx]
                             time_val = row[time_col_idx]
                             
-                            # Skip Section Headers
-                            if "MSE" in date_val.upper() or "EXAM" in date_val.upper():
-                                continue
+                            if "MSE" in date_val.upper() or "EXAM" in date_val.upper(): continue
 
-                            # Handle Date
                             if any(c.isdigit() for c in date_val):
                                 current_date = date_val
                             
-                            # Use current date if this row has no date but has valid time (merged)
                             d_to_use = date_val if date_val else current_date
                             
-                            if not d_to_use or not time_val or len(time_val) < 4:
-                                continue
+                            if not d_to_use or not time_val or len(time_val) < 4: continue
                                 
-                            # Extract Subjects
+                            # Convert Time
+                            start_t, end_t = normalize_time_range(time_val)
+                                
                             for (subj_idx, stream_name) in subject_cols:
                                 if subj_idx < len(row):
                                     subj_text = row[subj_idx]
-                                    # Filter invalid placeholder "----"
                                     if len(subj_text) > 2 and "---" not in subj_text:
                                         subj_clean = subj_text.replace('\n', ' ')
                                         final_subject = f"{subj_clean} ({stream_name})"
                                         
                                         sessions.append({
-                                            "date": d_to_use,
-                                            "time": time_val,
+                                            "date": normalize_date(d_to_use),
+                                            "start_time": start_t,
+                                            "end_time": end_t,
                                             "subject": final_subject
                                         })
                     except ValueError:
                         pass
                         
                 else:
-                    # --- STRATEGY 2: Legacy Fallback (Position Based) ---
-                    # Used for TT_SEM5_R_2023.pdf
+                    # --- STRATEGY 2: Legacy Fallback ---
                     for row in table:
                         row = [str(cell).strip() if cell else "" for cell in row]
-                        
-                        # Needs at least Date, Time, Subject
                         if len(row) < 3: continue
                         
                         date_val = row[0]
                         time_val = row[1]
-                        
-                        # Subject is usually the last column or specific index
-                        # In the observed 4-col rows: Date, Time, Code, Subject
-                        # In 6-col rows: Date, Time, ..., Subject
                         subj_val = row[-1]
                         
-                        # Verify Date format (Simple digit check or length)
                         if len(date_val) > 4 and any(c.isdigit() for c in date_val) and "Date" not in date_val:
-                             # Verify Subject (not empty, not too short)
                              if len(subj_val) > 2:
-                                 # Avoid duplicate headers if they sneak in
                                  if "Subject" in subj_val or "Paper" in subj_val: continue
                                  
+                                 start_t, end_t = normalize_time_range(time_val)
+                                 
                                  sessions.append({
-                                    "date": date_val,
-                                    "time": time_val,
+                                    "date": normalize_date(date_val),
+                                    "start_time": start_t,
+                                    "end_time": end_t,
                                     "subject": subj_val
                                 })
-
     return sessions
 
 def extract_to_excel(pdf_path, excel_path):

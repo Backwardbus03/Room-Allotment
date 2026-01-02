@@ -7,6 +7,12 @@ from functools import wraps
 from config import Config
 import db
 import extract_pdf
+import io
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from flask import send_file
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -117,12 +123,21 @@ def admin_dashboard():
         if schedule_data:
             # Reconstruct the view
             
-            # 1. Duty Counts
+            # 1. Duty Counts (Deduplicated by Room Assignment)
             duty_counts = {}
+            seen_assignments = set()
+            
             for row in schedule_data:
                 sup = row.get('Supervisor', 'Unknown')
                 if sup != 'NA' and sup != 'NOBODY AVAILABLE':
-                    duty_counts[sup] = duty_counts.get(sup, 0) + 1
+                    # Unique key: Supervisor + Day + Session + Block
+                    # row['Date'] represents Day/Date, row['Time'] represents Session
+                    key = (sup, row.get('Date'), row.get('Time'), row.get('Block'))
+                    if key not in seen_assignments:
+                        duty_counts[sup] = duty_counts.get(sup, 0) + 1
+                        seen_assignments.add(key)
+            
+            # Legacy sort for display
             sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
             
             # 2. Schedule HTML Pivot
@@ -243,7 +258,8 @@ def generate():
         for sid in session_ids:
             # Try new fields first
             date_val = request.form.get(f'date_{sid}')
-            time_val = request.form.get(f'time_{sid}')
+            start_time_val = request.form.get(f'start_time_{sid}')
+            end_time_val = request.form.get(f'end_time_{sid}')
             subject_val = request.form.get(f'subject_{sid}')
             
             # Fallback / Compatibility
@@ -258,16 +274,17 @@ def generate():
                 item = {
                     'total_students': int(students),
                     'unavailable': unavailable,
-                    '_id': sid # Ensure ID is passed for consistency
+                    '_id': sid 
                 }
                 
-                if date_val and time_val:
+                if date_val and start_time_val and end_time_val:
                     item['date'] = date_val
-                    item['time'] = time_val
+                    # Use formatted combined string for Scheduler Slot Key
+                    item['time'] = f"{start_time_val} - {end_time_val}"
                     item['subject'] = subject_val or "General"
-                    # Also populate day/session for display fallback if needed, though we moved away from it
+                    # Legacy fields just in case
                     item['day'] = 0 
-                    item['session'] = time_val
+                    item['session'] = item['time']
                 elif day and s_type:
                      item['day'] = int(day)
                      item['session'] = s_type
@@ -333,6 +350,136 @@ def generate():
 
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
+
+@app.route('/api/export-pdf', methods=['GET'])
+@admin_required
+def export_pdf():
+    # Fetch data
+    selected_exam = request.args.get('exam_name')
+    if not selected_exam:
+        return "Error: Exam Name required.", 400
+        
+    results = db.get_full_schedule(selected_exam)
+    if not results:
+        return "Error: No data found for this exam.", 400
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    title_text = f"VIT EXAM CELL - GLOBAL MASTER DUTY LIST - {selected_exam}"
+    elements.append(Paragraph(title_text, styles['Title']))
+    
+    # Headers
+    # Removed Count as requested
+    data = [["Date", "Slot", "Room", "Supervisor", "Role", "Subject"]]
+    
+    # Create a custom style for the table cells to handle wrapping
+    cell_style = styles['BodyText']
+    cell_style.fontSize = 9
+    cell_style.leading = 11
+
+    for row in results:
+        # Wrap Subject in Paragraph for auto-newline
+        subj_text = row.get('Subject', '')
+        subj_para = Paragraph(subj_text, cell_style)
+        
+        data.append([
+            row.get('Date', ''),
+            row.get('Time', ''),
+            row.get('Block', ''),
+            Paragraph(row.get('Supervisor', ''), cell_style), # Wrap supervisor too just in case
+            row.get('Role', '').replace(' SUPERVISOR', ''),
+            subj_para
+        ])
+
+    # Adjusted widths to fill A4 Landscape (~800pt usable)
+    # Total: 90+90+60+150+80+300 = 770
+    table = Table(data, colWidths=[90, 90, 60, 150, 80, 300])
+    
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#002d62")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (3,1), (3,-1), 'LEFT'), 
+        ('ALIGN', (5,1), (5,-1), 'LEFT'),
+    ]))
+    
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    
+    filename = f"{selected_exam.replace(' ', '_')}_Duty_List.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+@app.route('/api/export-supervisor-pdf', methods=['GET'])
+@login_required
+def export_supervisor_pdf():
+    name = session.get('user_name')
+    selected_exam = request.args.get('exam_name')
+    
+    if not selected_exam or not name:
+        return "Error: Exam Name and Login required.", 400
+        
+    # Reuse db logic but specific to supervisor
+    my_schedule = db.get_schedule_for_supervisor(selected_exam, name)
+    
+    if not my_schedule:
+        return "Error: No duties found for this exam.", 400
+
+    buffer = io.BytesIO()
+    # Portrait might be better for single person, but keeping Landscape for consistency if needed. 
+    # Let's use Portrait for personal schedule
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    elements.append(Paragraph(f"DUTY SCHEDULE - {name.upper()}", styles['Title']))
+    elements.append(Paragraph(f"Exam: {selected_exam}", styles['Heading2']))
+    
+    # Headers
+    data = [["Date", "Time", "Block", "Role", "Subject"]]
+    
+    cell_style = styles['BodyText']
+    cell_style.fontSize = 10
+    
+    for row in my_schedule:
+        subj_para = Paragraph(row.get('Subject', '-'), cell_style)
+        
+        data.append([
+            row.get('Date', row.get('Day', '')),
+            row.get('Time', row.get('Session', '')),
+            row.get('Block', ''),
+            row.get('Role', '').replace(' SUPERVISOR', ''),
+            subj_para
+        ])
+
+    # A4 Portrait Width ~ 595pt - margins -> ~450pt usable?
+    # ReportLab default margins are ~72pt each side? 
+    # Let's assume ~450pt safe width. 
+    # [80, 80, 60, 80, 150] = 450
+    table = Table(data, colWidths=[80, 80, 60, 80, 150])
+    
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4f46e5")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (4,1), (4,-1), 'LEFT'),
+    ]))
+    
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    
+    filename = f"{name.replace(' ', '_')}_{selected_exam.replace(' ', '_')}_Schedule.pdf"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
 # --- Supervisor Routes ---
 

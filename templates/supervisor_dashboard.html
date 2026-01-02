@@ -1,112 +1,108 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Supervisor Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
+{% block title %}Supervisor Dashboard - Exam Scheduler{% endblock %}
 
-<body class="bg-light">
+{% block content %}
+<div class="container">
 
-    <nav class="navbar navbar-expand-lg navbar-dark bg-success mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="#">Exam Scheduler</a>
-            <div class="d-flex">
-                <span class="navbar-text text-white me-3">Welcome, {{ name }}</span>
-                <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
+    <!-- Welcome Section -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="h3 mb-0 text-gray-800">My Dashboard</h2>
+            <p class="text-muted small mb-0">Welcome back, <span class="fw-bold text-dark">{{ name }}</span></p>
         </div>
-    </nav>
-
-    <div class="container">
-        <div class="card shadow-sm mb-4">
-            <div class="card-header bg-white">
-                <h4 class="mb-0">Select Exam</h4>
-            </div>
-            <div class="card-body">
-                <form method="GET" action="{{ url_for('supervisor_dashboard') }}" class="row g-3 align-items-center">
-                    <div class="col-auto">
-                        <label for="exam_select" class="col-form-label">Choose Exam:</label>
-                    </div>
-                    <div class="col-auto">
-                        <select name="exam_name" id="exam_select" class="form-select">
-                            <option value="" disabled {% if not selected_exam %}selected{% endif %}>-- Select an Exam --
-                            </option>
-                            {% for exam in exams %}
-                            <option value="{{ exam.name }}" {% if selected_exam==exam.name %}selected{% endif %}>
-                                {{ exam.name }} ({{ exam.date.strftime('%Y-%m-%d') if exam.date else 'N/A' }})
-                            </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-auto">
-                        <button type="submit" class="btn btn-primary">View Schedule</button>
-                    </div>
-                </form>
-            </div>
+        <div class="d-md-none">
+            <!-- Mobile spacer or actions if needed -->
         </div>
-
-        {% if selected_exam %}
-        <div class="card shadow-sm">
-            <div class="card-header bg-white">
-                <h4 class="mb-0">My Duties for: {{ selected_exam }}</h4>
-            </div>
-            <div class="card-body">
-                {% with messages = get_flashed_messages() %}
-                {% if messages %}
-                <div class="alert alert-warning">{{ messages[0] }}</div>
-                {% endif %}
-                {% endwith %}
-
-                {% if schedule %}
-                <div class="table-responsive">
-                    <table class="table table-bordered table-striped">
-                        <thead class="table-success">
-                            <tr>
-                                <th>Date</th>
-                                <th>Time</th>
-                                <th>Subject</th>
-                                <th>Block</th>
-                                <th>Role</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for row in schedule %}
-                            <tr>
-                                <td>{{ row.get('Date', row.get('Day', '')) }}</td>
-                                <td>{{ row.get('Time', row.get('Session', '')) }}</td>
-                                <td>{{ row.get('Subject', '-') }}</td>
-                                <td>{{ row.get('Block', '') }}</td>
-                                <td>
-                                    {% if 'BACKUP' in row.get('Role', '') or row.get('Block') == 'BACKUP' %}
-                                    <span class="badge bg-warning text-dark">{{ row.get('Role', 'BACKUP SUPERVISOR')
-                                        }}</span>
-                                    {% else %}
-                                    <span class="badge bg-primary">{{ row.get('Role', 'BLOCK SUPERVISOR') }}</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% else %}
-                <div class="text-center py-5 text-muted">
-                    <h5>No duties assigned yet for this exam.</h5>
-                </div>
-                {% endif %}
-            </div>
-        </div>
-        {% else %}
-        <div class="text-center py-5 text-muted">
-            <h5>Please select an exam to view your schedule.</h5>
-        </div>
-        {% endif %}
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
+    <!-- Exam Selector Card -->
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-body">
+            <h5 class="card-title text-secondary mb-3">Select Exam Session</h5>
 
-</html>
+            <form method="GET" action="{{ url_for('supervisor_dashboard') }}" class="row g-3 align-items-center">
+                <div class="col-md-5">
+                    <select name="exam_name" id="exam_select" class="form-select form-select-lg"
+                        onchange="this.form.submit()">
+                        <option value="" disabled {% if not selected_exam %}selected{% endif %}>-- Choose an Exam --
+                        </option>
+                        {% for exam in exams %}
+                        <option value="{{ exam.name }}" {% if selected_exam==exam.name %}selected{% endif %}>
+                            {{ exam.name }} ({{ exam.date.strftime('%Y-%m-%d') if exam.date else 'N/A' }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <!-- Optional: Separate button not strictly needed if we have onchange, but good for accessibility -->
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary btn-lg">View Schedule</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Schedule Results -->
+    {% if selected_exam %}
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+            <h5 class="m-0 font-weight-bold text-primary">Assigned Duties: {{ selected_exam }}</h5>
+            <a href="/api/export-supervisor-pdf?exam_name={{ selected_exam }}" class="btn btn-outline-primary btn-sm"
+                target="_blank">
+                <i class="bi bi-file-earmark-pdf me-1"></i> Download PDF
+            </a>
+        </div>
+        <div class="card-body p-0">
+            {% if schedule %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0">
+                    <thead class="table-light text-uppercase small text-muted">
+                        <tr>
+                            <th class="ps-4">Date</th>
+                            <th>Time</th>
+                            <th>Subject</th>
+                            <th>Block</th>
+                            <th class="pe-4">Role</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in schedule %}
+                        <tr>
+                            <td class="ps-4 fw-medium">{{ row.get('Date', row.get('Day', '')) }}</td>
+                            <td>{{ row.get('Time', row.get('Session', '')) }}</td>
+                            <td>{{ row.get('Subject', '-') }}</td>
+                            <td class="font-monospace text-primary">{{ row.get('Block', '') }}</td>
+                            <td class="pe-4">
+                                {% if 'BACKUP' in row.get('Role', '') or row.get('Block') == 'BACKUP' %}
+                                <span class="badge bg-warning text-dark border border-warning">{{ row.get('Role',
+                                    'BACKUP SUPERVISOR') }}</span>
+                                {% else %}
+                                <span class="badge bg-primary border border-primary">{{ row.get('Role', 'BLOCK
+                                    SUPERVISOR') }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-5">
+                <div class="mb-3 text-muted">
+                    <i class="bi bi-calendar-check fs-1"></i>
+                </div>
+                <h5 class="text-muted">No duties found</h5>
+                <p class="small text-muted mb-0">You have no assigned duties for this exam session.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+        <i class="bi bi-arrow-up-circle fs-2 mb-2 d-block"></i>
+        <p>Please select an exam from the dropdown above to view your schedule.</p>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}
