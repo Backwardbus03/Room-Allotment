@@ -6,6 +6,7 @@ import os
 from functools import wraps
 from config import Config
 import db
+import extract_pdf
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -202,9 +203,23 @@ def configure():
         db.upsert_blocks(rooms)
         db.upsert_supervisors(supervisors_db_data)
         
+        # Check for Timetable PDF
+        preloaded_sessions = []
+        if 'timetable_pdf' in request.files:
+            pdf = request.files['timetable_pdf']
+            if pdf and pdf.filename:
+                pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
+                pdf.save(pdf_path)
+                try:
+                    preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
+                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
+                except Exception as ex:
+                    flash(f"Error extracting PDF: {str(ex)}")
+        
         return render_template('configure.html', 
                                rooms_json=json.dumps(rooms), 
-                               supervisors_json=json.dumps(supervisors_names_only))
+                               supervisors_json=json.dumps(supervisors_names_only),
+                               preloaded_sessions=json.dumps(preloaded_sessions))
                                
     except Exception as e:
         return f"An error occurred reading/saving files: {str(e)}"
@@ -218,25 +233,55 @@ def generate():
         session_ids = request.form.getlist('session_ids')
         exam_name = request.form.get('exam_name', 'Untitled Exam')
         
+        with open('debug_log.txt', 'w') as f:
+            f.write(f"Rooms count: {len(rooms)}\n")
+            f.write(f"Supervisors count: {len(supervisors)}\n")
+            f.write(f"Session IDs: {session_ids}\n")
+            f.write("Form Keys: " + str(list(request.form.keys())) + "\n")
+        
         sessions_data = []
         for sid in session_ids:
+            # Try new fields first
+            date_val = request.form.get(f'date_{sid}')
+            time_val = request.form.get(f'time_{sid}')
+            subject_val = request.form.get(f'subject_{sid}')
+            
+            # Fallback / Compatibility
             day = request.form.get(f'day_{sid}')
             s_type = request.form.get(f'session_type_{sid}')
+            
             students = request.form.get(f'total_students_{sid}')
             unavailable = request.form.getlist(f'unavailable_{sid}')
             
-            if day and s_type and students:
-                sessions_data.append({
-                    'day': int(day),
-                    'session': s_type,
+            # Logic: If we have date/time/subject, use them. Else construct from day/session.
+            if students:
+                item = {
                     'total_students': int(students),
-                    'unavailable': unavailable
-                })
+                    'unavailable': unavailable,
+                    '_id': sid # Ensure ID is passed for consistency
+                }
+                
+                if date_val and time_val:
+                    item['date'] = date_val
+                    item['time'] = time_val
+                    item['subject'] = subject_val or "General"
+                    # Also populate day/session for display fallback if needed, though we moved away from it
+                    item['day'] = 0 
+                    item['session'] = time_val
+                elif day and s_type:
+                     item['day'] = int(day)
+                     item['session'] = s_type
+                     item['date'] = f"Day {day}"
+                     item['time'] = s_type
+                     item['subject'] = "General"
+                
+                sessions_data.append(item)
         
-        max_day = max(s['day'] for s in sessions_data) if sessions_data else 0
+        with open('debug_log.txt', 'a') as f:
+            f.write(f"Constructed Sessions Data: {json.dumps(sessions_data, indent=2)}\n")
 
         # Generate
-        result = scheduler.generate_schedule(max_day, rooms, supervisors, sessions_data)
+        result = scheduler.generate_schedule(rooms, supervisors, sessions_data)
         
         # Process & Save
         schedule_data = result['schedule']
@@ -258,22 +303,24 @@ def generate():
                 # Use pivot_table with custom aggregation to handle Main + Backup in same cell
                 # We want to display: "Name (Role) <br> Name (Role)"
                 def agg_supervisors(series):
-                    # We need access to the Role, but series is just the Supervisors.
-                    # We need to act on the group.
-                    # Simpler approach: Create a composite string column first.
                     return "<br>".join(series)
 
                 # Create display value
                 df['Display'] = df['Supervisor'] + " (" + df['Role'].apply(lambda x: "M" if "BLOCK" in x else "B") + ")"
                 
+                # Check for new columns Date/Time/Subject vs old Day/Session
+                index_cols = ['Date', 'Time'] if 'Date' in df.columns else ['Day', 'Session']
+                
                 chart = df.pivot_table(
-                    index=['Day', 'Session'], 
+                    index=index_cols, 
                     columns='Block', 
                     values='Display', 
                     aggfunc=lambda x: '<br>'.join(x)
                 ).fillna("-")
                 
                 schedule_html = chart.to_html(classes='table table-striped table-bordered text-center', border=0, escape=False)
+            except Exception as ex:
+                schedule_html = f"<p class='text-danger'>Note: Overview chart generation failed ({str(ex)}). Please refer to the detailed list below.</p>"
             except Exception as ex:
                 schedule_html = f"<p class='text-danger'>Note: Overview chart generation failed ({str(ex)}). Please refer to the detailed list below.</p>"
         else:

@@ -96,8 +96,9 @@
             <table class="table table-bordered table-hover">
                 <thead class="table-dark">
                     <tr>
-                        <th>Day</th>
-                        <th>Session</th>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Subject</th>
                         <th>Block</th>
                         <th>Role</th>
                         <th>Supervisor</th>
@@ -106,8 +107,9 @@
                 <tbody>
                     {% for row in schedule_data %}
                     <tr class="{% if 'BACKUP' in row.Role %}table-warning{% endif %}">
-                        <td>{{ row.Day }}</td>
-                        <td>{{ row.Session }}</td>
+                        <td>{{ row.Date }}</td>
+                        <td>{{ row.Time }}</td>
+                        <td>{{ row.Subject }}</td>
                         <td>{{ row.Block }}</td>
                         <td>
                             {% if 'BACKUP' in row.Role %}

@@ -4,3 +4,5 @@ openpyxl
 python-dotenv
 supabase
 psycopg2
+pdfplumber
+PyMuPDF
