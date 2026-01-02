@@ -177,6 +177,8 @@
             text-align: center;
         }
     </style>
+    <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
 </head>
 
 <body>
@@ -214,10 +216,11 @@
             </div>
 
             <div class="form-group">
-                <label>Unavailable Supervisors (for this specific session):</label>
-                <div class="supervisor-list" id="supervisor-input-list">
+                <label for="unavailable-select">Unavailable Supervisors (for this specific session):</label>
+                <select id="unavailable-select" multiple placeholder="Select unavailable supervisors..."
+                    autocomplete="off">
                     <!-- JS will populate this -->
-                </div>
+                </select>
             </div>
 
             <button type="button" class="add-btn" onclick="addSessionRowFromInput()">+ Add Session to List</button>
@@ -266,35 +269,44 @@
     </div>
 
     <script>
-        const allSupervisors = JSON.parse('{{ supervisors_json | safe }}');
-        // Use default empty array if not present. Use tojson for safety.
+        // supervisors_json and preloaded_sessions are already JSON strings from backend
+        const allSupervisors = {{ supervisors_json | safe }};
         const preloadedSessions = {{ preloaded_sessions | safe }};
 
         let sessionCounter = 0;
         let rowCount = 0;
 
+        let supervisorSelect;
+
         function initSupervisorList() {
-            const container = document.getElementById('supervisor-input-list');
-            let html = '';
-            allSupervisors.forEach((name, index) => {
-                html += `
-                    <div class="supervisor-item">
-                        <input type="checkbox" id="sup-${index}" value="${name}" class="sup-checkbox">
-                        <label for="sup-${index}">${name}</label>
-                    </div>
-                `;
+            const selectEl = document.getElementById('unavailable-select');
+            let optionsHtml = '';
+            allSupervisors.forEach((name) => {
+                optionsHtml += `<option value="${name}">${name}</option>`;
             });
-            container.innerHTML = html;
+            selectEl.innerHTML = optionsHtml;
+
+            // Initialize Tom Select
+            supervisorSelect = new TomSelect('#unavailable-select', {
+                plugins: ['remove_button'],
+                create: false,
+                maxItems: null,
+                valueField: 'value',
+                labelField: 'text',
+                searchField: 'text',
+                placeholder: 'Search and select supervisors...',
+            });
         }
 
         function addSessionRow(date, time, subject, students, unavailable) {
             sessionCounter++;
             rowCount++;
+            const currentId = sessionCounter; // Capture for closure
             const hiddenContainer = document.getElementById('hidden-inputs-container');
 
             // --- Hidden Inputs for Backend ---
             const div = document.createElement('div');
-            div.id = `hidden-session-${sessionCounter}`;
+            div.id = `hidden-session-${currentId}`;
 
             function createHidden(name, val) {
                 const i = document.createElement('input');
@@ -304,19 +316,20 @@
                 return i;
             }
 
-            // Legacy IDs for app compatibility (it iterates getlist('session_ids'))
-            div.appendChild(createHidden('session_ids', sessionCounter));
-            div.appendChild(createHidden(`day_${sessionCounter}`, '0'));
-            div.appendChild(createHidden(`session_type_${sessionCounter}`, 'Default'));
+            // Legacy IDs for app compatibility
+            div.appendChild(createHidden('session_ids', currentId));
+            div.appendChild(createHidden(`day_${currentId}`, '0'));
+            div.appendChild(createHidden(`session_type_${currentId}`, 'Default'));
 
             // New Fields
-            div.appendChild(createHidden(`date_${sessionCounter}`, date));
-            div.appendChild(createHidden(`time_${sessionCounter}`, time));
-            div.appendChild(createHidden(`subject_${sessionCounter}`, subject));
-            div.appendChild(createHidden(`total_students_${sessionCounter}`, students));
+            div.appendChild(createHidden(`date_${currentId}`, date));
+            div.appendChild(createHidden(`time_${currentId}`, time));
+            div.appendChild(createHidden(`subject_${currentId}`, subject));
+            div.appendChild(createHidden(`total_students_${currentId}`, students));
 
+            // Initial Unavailable Inputs
             unavailable.forEach(name => {
-                div.appendChild(createHidden(`unavailable_${sessionCounter}`, name));
+                div.appendChild(createHidden(`unavailable_${currentId}`, name));
             });
 
             hiddenContainer.appendChild(div);
@@ -327,19 +340,77 @@
             if (emptyRow) emptyRow.remove();
 
             const tr = document.createElement('tr');
-            tr.id = `row-${sessionCounter}`;
-            const unavStr = unavailable.length ? unavailable.join(', ') : '';
+            tr.id = `row-${currentId}`;
+
+            // Build Options for Select
+            const options = allSupervisors.map(name => {
+                const selected = unavailable.includes(name) ? 'selected' : '';
+                return `<option value="${name}" ${selected}>${name}</option>`;
+            }).join('');
 
             tr.innerHTML = `
                 <td>${rowCount}</td>
                 <td>${date}</td>
                 <td>${time}</td>
                 <td>${subject}</td>
-                <td><input type="number" value="${students}" min="1" style="width:60px" onchange="updateStudents(${sessionCounter}, this.value)"></td> 
-                <td class="unavailable-cell" title="${unavStr}">${unavStr || 'None'}</td>
-                <td><button type="button" class="remove-btn" onclick="removeSession(${sessionCounter})">Remove</button></td>
+                <td><input type="number" value="${students}" min="1" style="width:60px" onchange="updateStudents(${currentId}, this.value)"></td> 
+                <td style="min-width: 250px;">
+                    <select id="select-row-${currentId}" multiple placeholder="Select unavailable..." autocomplete="off">
+                        ${options}
+                    </select>
+                </td>
+                <td><button type="button" class="remove-btn" onclick="removeSession(${currentId})">Remove</button></td>
             `;
             tbody.appendChild(tr);
+
+            // Initialize Tom Select for this Row
+            const ts = new TomSelect(`#select-row-${currentId}`, {
+                plugins: ['remove_button'],
+                create: false,
+                maxItems: null,
+                valueField: 'value',
+                labelField: 'text',
+                searchField: 'text',
+                placeholder: 'Select unavailable...',
+                onDelete: function (values) {
+                    return confirm(values.length > 1 ? 'Are you sure you want to remove these ' + values.length + ' items?' : 'Are you sure you want to remove "' + values[0] + '"?');
+                }
+            });
+
+            // Override onDelete to not annoy user, or just remove custom onDelete if standard behavior is fine. 
+            // Actually, let's stick to standard behavior for speed, removing the onDelete callback above.
+            // Re-initializing without the confirm for smoother UX.
+            ts.destroy();
+            const newTs = new TomSelect(`#select-row-${currentId}`, {
+                plugins: ['remove_button'],
+                create: false,
+                maxItems: null,
+                valueField: 'value',
+                labelField: 'text',
+                searchField: 'text',
+                placeholder: 'Select unavailable...',
+                onChange: function (values) {
+                    updateUnavailableHidden(currentId, values);
+                }
+            });
+        }
+
+        function updateUnavailableHidden(sid, values) {
+            const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
+            if (!hiddenDiv) return;
+
+            // Remove existing unavailable inputs
+            const existing = hiddenDiv.querySelectorAll(`input[name="unavailable_${sid}"]`);
+            existing.forEach(el => el.remove());
+
+            // Add new ones
+            values.forEach(name => {
+                const i = document.createElement('input');
+                i.type = 'hidden';
+                i.name = `unavailable_${sid}`;
+                i.value = name;
+                hiddenDiv.appendChild(i);
+            });
         }
 
         function updateStudents(sid, val) {
@@ -361,15 +432,15 @@
                 return;
             }
 
-            const checkboxes = document.querySelectorAll('.sup-checkbox:checked');
-            const unavailable = Array.from(checkboxes).map(cb => cb.value);
+            // Get values from Tom Select
+            const unavailable = supervisorSelect.getValue(); // returns array of values
 
             addSessionRow(date, time, subject, students, unavailable);
 
             // Reset
             document.getElementById('input-students').value = '';
             document.getElementById('input-subject').value = '';
-            checkboxes.forEach(cb => cb.checked = false);
+            supervisorSelect.clear();
         }
 
         function removeSession(id) {

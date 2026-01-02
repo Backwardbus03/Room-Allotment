@@ -65,8 +65,9 @@
                     <table class="table table-bordered table-striped">
                         <thead class="table-success">
                             <tr>
-                                <th>Day</th>
-                                <th>Session</th>
+                                <th>Date</th>
+                                <th>Time</th>
+                                <th>Subject</th>
                                 <th>Block</th>
                                 <th>Role</th>
                             </tr>
@@ -74,11 +75,12 @@
                         <tbody>
                             {% for row in schedule %}
                             <tr>
-                                <td>{{ row.Day }}</td>
-                                <td>{{ row.Session }}</td>
-                                <td>{{ row.Block }}</td>
+                                <td>{{ row.get('Date', row.get('Day', '')) }}</td>
+                                <td>{{ row.get('Time', row.get('Session', '')) }}</td>
+                                <td>{{ row.get('Subject', '-') }}</td>
+                                <td>{{ row.get('Block', '') }}</td>
                                 <td>
-                                    {% if 'BACKUP' in row.get('Role', '') or row.Block == 'BACKUP' %}
+                                    {% if 'BACKUP' in row.get('Role', '') or row.get('Block') == 'BACKUP' %}
                                     <span class="badge bg-warning text-dark">{{ row.get('Role', 'BACKUP SUPERVISOR')
                                         }}</span>
                                     {% else %}
