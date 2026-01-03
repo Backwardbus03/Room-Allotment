@@ -28,6 +28,15 @@
             <button class="nav-link" id="workload-tab" data-bs-toggle="tab" data-bs-target="#workload" type="button"
                 role="tab" aria-controls="workload" aria-selected="false">Supervisor Workload</button>
         </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="issues-tab" data-bs-toggle="tab" data-bs-target="#issues" type="button"
+                role="tab" aria-controls="issues" aria-selected="false">
+                Reported Issues
+                {% if issues %}
+                <span class="badge bg-danger rounded-pill ms-1">{{ issues|length }}</span>
+                {% endif %}
+            </button>
+        </li>
     </ul>
 
     <div class="tab-content" id="resultTabsContent">
@@ -163,6 +172,141 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- Issues Tab -->
+        <div class="tab-pane fade" id="issues" role="tabpanel" aria-labelledby="issues-tab">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0 text-secondary">Open Issues</h5>
+            </div>
+
+            {% if issues %}
+            <div class="alert alert-info border-info mb-4">
+                <i class="bi bi-info-circle me-1"></i> These supervisors are unavailable for the assigned sessions.
+                Review and select a suitable swap candidate to resolve the issue.
+            </div>
+
+            {% for issue in issues %}
+            <div class="card shadow-sm border-0 mb-3">
+                <div class="card-body">
+                    <div class="row align-items-center">
+                        <div class="col-md-3">
+                            <div class="small text-uppercase text-muted fw-bold">Unavailable Supervisor</div>
+                            <div class="fs-5 fw-bold text-danger">{{ issue.supervisor_name }}</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="small text-muted">Session Details</div>
+                            <div class="fw-medium">{{ issue.date }} | {{ issue.time }}</div>
+                            <div class="small font-monospace text-primary">{{ issue.block }}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="small text-muted">Reason</div>
+                            <div class="text-dark fst-italic">"{{ issue.reason }}"</div>
+                        </div>
+                        <div class="col-md-2 text-end">
+                            <button class="btn btn-primary btn-sm" data-bs-toggle="modal"
+                                data-bs-target="#resolveModal{{ issue.id }}">
+                                Resolve Issue
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resolution Modal for this Issue -->
+            <div class="modal fade" id="resolveModal{{ issue.id }}" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Resolve Issue for {{ issue.supervisor_name }}</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <h6 class="text-muted mb-3">Suggested Swaps (Supervisors free at {{ issue.time }})</h6>
+
+                            {% if issue.suggestions %}
+                            <div class="table-responsive">
+                                <table class="table table-hover table-sm align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Candidate</th>
+                                            <th>Swap Type</th>
+                                            <th>Their Session Used</th>
+                                            <th class="text-end">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for sugg in issue.suggestions %}
+                                        <tr>
+                                            <td class="fw-bold text-success">{{ sugg.name }}</td>
+                                            <td>
+                                                {% if sugg.type == '2-way' %}
+                                                <span
+                                                    class="badge bg-success-subtle text-success border border-success">2-Way
+                                                    Swap</span>
+                                                {% else %}
+                                                <span
+                                                    class="badge bg-warning-subtle text-warning-emphasis border border-warning">Substitution</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="small">
+                                                {% if sugg.their_session %}
+                                                {{ sugg.their_session.Date }} | {{ sugg.their_session.Time }} <br>
+                                                <span class="font-monospace text-muted">{{ sugg.their_session.Block
+                                                    }}</span>
+                                                {% else %}
+                                                <span class="text-muted fst-italic">None (Relief)</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-end">
+                                                <form action="{{ url_for('resolve_issue') }}" method="POST">
+                                                    <input type="hidden" name="issue_id" value="{{ issue.id }}">
+                                                    <input type="hidden" name="exam_name" value="{{ issue.exam_name }}">
+
+                                                    <input type="hidden" name="target_supervisor"
+                                                        value="{{ issue.supervisor_name }}">
+                                                    <input type="hidden" name="target_date" value="{{ issue.date }}">
+                                                    <input type="hidden" name="target_time" value="{{ issue.time }}">
+
+                                                    <input type="hidden" name="candidate_supervisor"
+                                                        value="{{ sugg.name }}">
+                                                    <input type="hidden" name="swap_type" value="{{ sugg.type }}">
+
+                                                    {% if sugg.their_session %}
+                                                    <input type="hidden" name="candidate_date"
+                                                        value="{{ sugg.their_session.Date }}">
+                                                    <input type="hidden" name="candidate_time"
+                                                        value="{{ sugg.their_session.Time }}">
+                                                    {% endif %}
+
+                                                    <button type="submit" class="btn btn-sm btn-outline-success">
+                                                        Confirm Swap
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {% else %}
+                            <p class="text-muted text-center py-3">No suitable swap candidates found.</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+
+            {% else %}
+            <div class="text-center py-5">
+                <div class="mb-3 text-muted">
+                    <i class="bi bi-check-circle fs-1 text-success"></i>
+                </div>
+                <h5 class="text-muted">No Open Issues</h5>
+                <p class="small text-muted">All clear! No supervisor unavailability reported.</p>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>

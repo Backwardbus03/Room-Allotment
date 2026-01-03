@@ -55,7 +55,6 @@ try:
     """)
     print("- Blocks table check.")
 
-    cursor.execute("drop table schedules")
     
     # 3. Schedules
     cursor.execute("""
@@ -68,6 +67,22 @@ try:
     );
     """)
     print("- Schedules table check.")
+
+    # 4. Supervisor Issues
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS supervisor_issues (
+        id SERIAL PRIMARY KEY,
+        exam_name TEXT NOT NULL,
+        supervisor_name TEXT NOT NULL,
+        date TEXT NOT NULL,
+        time TEXT NOT NULL,
+        block TEXT NOT NULL,
+        reason TEXT,
+        status TEXT DEFAULT 'OPEN',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    print("- Supervisor Issues table check.")
 
     cursor.close()
     conn.close()

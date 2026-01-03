@@ -188,10 +188,18 @@ def get_available_exams():
     
     try:
         cur = conn.cursor()
-        cur.execute("SELECT DISTINCT exam_name, created_at FROM schedules ORDER BY created_at DESC")
+        query = """
+        SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues
+        FROM schedules s
+        LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
+        GROUP BY s.exam_name, s.created_at
+        ORDER BY s.created_at DESC
+        """
+        cur.execute(query)
         rows = cur.fetchall()
         cur.close()
-        return [{'name': r[0], 'date': r[1]} for r in rows]
+        # Return dict with issue count
+        return [{'name': r[0], 'date': r[1], 'issue_count': r[2]} for r in rows]
     except Exception as e:
         print(f"Error fetching exams: {e}")
         return []
@@ -253,4 +261,84 @@ def get_full_schedule(exam_name):
     finally:
         conn.close()
 
+def report_issue(exam_name, supervisor_name, date, time, block, reason):
+    """Reports a supervisor unavailability issue."""
+    conn = get_connection()
+    if not conn: return False, "DB Connection Failed"
+    
+    try:
+        cur = conn.cursor()
+        query = """
+        INSERT INTO supervisor_issues (exam_name, supervisor_name, date, time, block, reason)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        cur.execute(query, (exam_name, supervisor_name, date, time, block, reason))
+        conn.commit()
+        cur.close()
+        return True, "Issue reported successfully."
+    except Exception as e:
+        print(f"Error reporting issue: {e}")
+        return False, str(e)
+    finally:
+        conn.close()
 
+def get_open_issues(exam_name):
+    """Fetches all open issues for an exam."""
+    conn = get_connection()
+    if not conn: return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        query = """
+        SELECT * FROM supervisor_issues 
+        WHERE exam_name = %s AND status = 'OPEN' 
+        ORDER BY created_at DESC
+        """
+        cur.execute(query, (exam_name,))
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"Error fetching issues: {e}")
+        return []
+    finally:
+        conn.close()
+
+def resolve_issue(issue_id):
+    """Marks an issue as resolved."""
+    conn = get_connection()
+    if not conn: return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE supervisor_issues SET status = 'RESOLVED' WHERE id = %s", (issue_id,))
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"Error resolving issue: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_schedule(exam_name, new_schedule_list):
+    """Updates the schedule blob for an exam (used after swapping)."""
+    conn = get_connection()
+    if not conn: return False
+    
+    try:
+        cur = conn.cursor()
+        import json
+        cur.execute("""
+            UPDATE schedules 
+            SET schedule_result = %s 
+            WHERE exam_name = %s
+        """, (json.dumps(new_schedule_list), exam_name))
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"Error updating schedule: {e}")
+        return False
+    finally:
+        conn.close()

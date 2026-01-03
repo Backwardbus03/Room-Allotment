@@ -117,10 +117,78 @@ def calculate_row_spans(schedule_list):
                 schedule_list[k]['time_span'] = 0
             
             p = q # Move to next time block
-            
+        
         i = j # Move to next date block
         
     return schedule_list
+
+def find_swap_candidates(schedule_list, target_date, target_time, target_supervisor_name):
+    """
+    Finds supervisors who are FREE at (target_date, target_time).
+    Returns a list of dicts: {'name': supervisor_name, 'swap_with': {date, time, block}}
+    where 'swap_with' is a session of theirs that the target_supervisor is free to take.
+    """
+    # 1. Identify all supervisors in this schedule
+    all_supervisors = set(row['Supervisor'] for row in schedule_list)
+    
+    # 2. Identify who is BUSY at target_time
+    # (Note: Using Date+Time as key. If Time spans vary, logic might need adjustment, 
+    # but currently we assume standard slots)
+    busy_at_target = set()
+    for row in schedule_list:
+        if row.get('Date') == target_date and row.get('Time') == target_time:
+            busy_at_target.add(row['Supervisor'])
+            
+    # 3. Candidates = All - Busy - Target
+    candidates = all_supervisors - busy_at_target
+    if target_supervisor_name in candidates:
+        candidates.remove(target_supervisor_name)
+        
+    results = []
+    
+    # 4. For each candidate, find a session THEY have where Target is FREE
+    for cand in candidates:
+        # Get Candidate's schedule
+        cand_sessions = [row for row in schedule_list if row['Supervisor'] == cand]
+        
+        valid_swap_found = False
+        
+        for sess in cand_sessions:
+            # Check if Target Supervisor is free at sess['Date'], sess['Time']
+            # Target is busy if any row in schedule matches Target & Date & Time
+            is_target_busy = False
+            for r in schedule_list:
+                if (r['Supervisor'] == target_supervisor_name and 
+                    r.get('Date') == sess.get('Date') and 
+                    r.get('Time') == sess.get('Time')):
+                    is_target_busy = True
+                    break
+            
+            if not is_target_busy:
+                # Valid 2-way swap found!
+                results.append({
+                    'name': cand,
+                    'type': '2-way',
+                    'their_session': sess # The session they give to Target
+                })
+                valid_swap_found = True
+                # We can stop after finding one valid swap per candidate to keep list clean, 
+                # or list all. Let's list all? Maybe just one for simplicity.
+                # Let's list one.
+                break
+        
+        if not valid_swap_found:
+            # Maybe they have no sessions? Or Target is busy during all of them.
+            # We can still offer a 1-way replacement (Candidate takes Target's slot, Target gets nothing/free)
+            # PROMPT said "swapping... giving there some session". Implies 2-way.
+            # But 1-way is also a valid "resolution".
+            results.append({
+                'name': cand,
+                'type': '1-way (Relief)',
+                'their_session': None
+            })
+            
+    return results
 
 def login_required(f):
     @wraps(f)
@@ -258,6 +326,19 @@ def admin_dashboard():
             main_allocations = calculate_row_spans(main_allocations)
             backup_allocations = calculate_row_spans(backup_allocations)
 
+            # 3. Fetch Issues & Suggestions
+            issues = db.get_open_issues(selected_exam)
+            # Enrich issues with swap suggestions
+            for issue in issues:
+                # issue is a dict-like RealDictRow
+                suggestions = find_swap_candidates(
+                    schedule_data, # Use raw schedule_data for logic
+                    issue['date'],
+                    issue['time'],
+                    issue['supervisor_name']
+                )
+                issue['suggestions'] = suggestions
+
             # 2. Schedule HTML Pivot (For Main only)
             schedule_html = ""
             if main_allocations:
@@ -287,6 +368,7 @@ def admin_dashboard():
                                    main_allocations=main_allocations,
                                    backup_allocations=backup_allocations,
                                    exam_name=selected_exam,
+                                   issues=issues,
                                    is_history=True)
                                    
     return render_template('index.html', exams=exams)
@@ -370,10 +452,19 @@ def generate():
         session_ids = request.form.getlist('session_ids')
         exam_name = request.form.get('exam_name', 'Untitled Exam')
         
+        # Parse global unavailability rules
+        unavailability_rules = []
+        unavailability_rules_json = request.form.get('unavailability_rules', '[]')
+        try:
+            unavailability_rules = json.loads(unavailability_rules_json)
+        except:
+            unavailability_rules = []
+        
         with open('debug_log.txt', 'w') as f:
             f.write(f"Rooms count: {len(rooms)}\n")
             f.write(f"Supervisors count: {len(supervisors)}\n")
             f.write(f"Session IDs: {session_ids}\n")
+            f.write(f"Unavailability Rules: {json.dumps(unavailability_rules, indent=2)}\n")
             f.write("Form Keys: " + str(list(request.form.keys())) + "\n")
         
         sessions_data = []
@@ -407,6 +498,17 @@ def generate():
                     # Legacy fields just in case
                     item['day'] = 0 
                     item['session'] = item['time']
+                    
+                    # Apply global unavailability rules
+                    for rule in unavailability_rules:
+                        rule_time = f"{rule['start_time']} - {rule['end_time']}"
+                        if item['date'] == rule['date'] and item['time'] == rule_time:
+                            # Merge supervisors from rule
+                            item['unavailable'].extend(rule['supervisors'])
+                    
+                    # Remove duplicates
+                    item['unavailable'] = list(set(item['unavailable']))
+                    
                 elif day and s_type:
                      item['day'] = int(day)
                      item['session'] = s_type
@@ -555,6 +657,77 @@ def export_pdf():
     filename = f"{selected_exam.replace(' ', '_')}_Duty_List.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
+@app.route('/resolve_issue', methods=['POST'])
+@admin_required
+def resolve_issue():
+    issue_id = request.form.get('issue_id')
+    exam_name = request.form.get('exam_name')
+    
+    # Original (Target) details
+    supervisor_A = request.form.get('target_supervisor')
+    date_A = request.form.get('target_date')
+    time_A = request.form.get('target_time')
+    
+    # Candidate details
+    supervisor_B = request.form.get('candidate_supervisor')
+    
+    # Type of swap
+    swap_type = request.form.get('swap_type') # '2-way' or '1-way'
+    
+    # Their Session (for 2-way)
+    date_B = request.form.get('candidate_date')
+    time_B = request.form.get('candidate_time')
+    
+    if not all([issue_id, exam_name, supervisor_A, date_A, time_A, supervisor_B]):
+        flash("Missing information to resolve issue.")
+        return redirect(url_for('admin_dashboard', exam_name=exam_name))
+        
+    # Logic to Update Schedule
+    schedule_data = db.get_full_schedule(exam_name)
+    if not schedule_data:
+        flash("Could not load schedule.")
+        return redirect(url_for('admin_dashboard', exam_name=exam_name))
+        
+    updated = False
+    
+    # 1. Assign A's slot to B
+    for row in schedule_data:
+        if (row['Supervisor'] == supervisor_A and 
+            row.get('Date') == date_A and 
+            row.get('Time') == time_A):
+            row['Supervisor'] = supervisor_B
+            # If swapped to backup, logic remains same (just name change)
+            updated = True
+            break
+            
+    if not updated:
+        flash("Could not find original slot to swap.")
+        return redirect(url_for('admin_dashboard', exam_name=exam_name))
+        
+    # 2. If 2-way, Assign B's slot to A
+    if swap_type == '2-way' and date_B and time_B:
+        updated_B = False
+        for row in schedule_data:
+            if (row['Supervisor'] == supervisor_B and 
+                row.get('Date') == date_B and 
+                row.get('Time') == time_B):
+                row['Supervisor'] = supervisor_A
+                updated_B = True
+                break
+        if not updated_B:
+            flash("Could not find candidate's slot to swap returned.")
+            # Rolling back? In memory, just don't save.
+            return redirect(url_for('admin_dashboard', exam_name=exam_name))
+            
+    # Save
+    if db.update_schedule(exam_name, schedule_data):
+        db.resolve_issue(issue_id)
+        flash(f"Swap successful. {supervisor_A} and {supervisor_B} swapped.")
+    else:
+        flash("Error saving updated schedule.")
+        
+    return redirect(url_for('admin_dashboard', exam_name=exam_name))
+
 @app.route('/api/export-supervisor-pdf', methods=['GET'])
 @login_required
 def export_supervisor_pdf():
@@ -648,6 +821,24 @@ def supervisor_dashboard():
                            selected_exam=selected_exam, 
                            schedule=my_schedule, 
                            name=name)
+
+@app.route('/report_issue', methods=['POST'])
+@login_required
+def report_issue():
+    exam_name = request.form.get('exam_name')
+    date = request.form.get('date')
+    time = request.form.get('time')
+    block = request.form.get('block')
+    reason = request.form.get('reason')
+    supervisor_name = session.get('user_name')
+    
+    if not all([exam_name, date, time, block, supervisor_name]):
+        flash("Missing information for reporting issue.")
+        return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
+        
+    success, msg = db.report_issue(exam_name, supervisor_name, date, time, block, reason)
+    flash(msg)
+    return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
 
 if __name__ == '__main__':
     app.run(debug=True)

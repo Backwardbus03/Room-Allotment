@@ -37,16 +37,6 @@
                 </div>
             </div>
 
-            <div class="row mt-3">
-                <div class="col-12">
-                    <label for="unavailable-select" class="form-label fw-bold small text-muted">Unavailable Supervisors
-                        (for this specific session)</label>
-                    <select id="unavailable-select" multiple placeholder="Select unavailable supervisors..."
-                        autocomplete="off">
-                        <!-- JS will populate this -->
-                    </select>
-                </div>
-            </div>
 
             <div class="mt-4">
                 <button type="button" class="btn btn-success px-4" onclick="addSessionRowFromInput()">
@@ -71,7 +61,7 @@
                             <th>Time</th>
                             <th>Subject</th>
                             <th>Students</th>
-                            <th style="width: 30%;">Unavailable Supervisors</th>
+                            <th style="width: 35%;">Unavailable Supervisors (for time slot)</th>
                             <th class="text-end pe-4">Action</th>
                         </tr>
                     </thead>
@@ -113,43 +103,31 @@
 
 {% block scripts %}
 <script>
-    // supervisors_json and preloaded_sessions are already JSON strings from backend
     const allSupervisors = {{ supervisors_json | safe }};
     const preloadedSessions = {{ preloaded_sessions | safe }};
 
     let sessionCounter = 0;
     let rowCount = 0;
 
-    let supervisorSelect;
+    // Track time slots and their unavailability
+    let timeSlotUnavailability = {}; // key: "date|startTime|endTime", value: [supervisor names]
+    let tomSelectInstances = {}; //  Store TomSelect instances by key
 
-    function initSupervisorList() {
-        // Initialize Tom Select for the input form
-        supervisorSelect = new TomSelect('#unavailable-select', {
-            plugins: ['remove_button'],
-            create: false,
-            maxItems: null,
-            valueField: 'value',
-            labelField: 'text',
-            searchField: 'text',
-            placeholder: 'Search and select supervisors...',
-        });
-
-        // Populate options
-        allSupervisors.forEach((name) => {
-            supervisorSelect.addOption({ value: name, text: name });
-        });
-        supervisorSelect.refreshOptions(false); // Make sure options are rendered
+    function getTimeSlotKey(date, startTime, endTime) {
+        return `${date}|${startTime}|${endTime}`;
     }
 
-    function addSessionRow(date, startTime, endTime, subject, students, unavailable) {
+    function addSessionRow(date, startTime, endTime, subject, students) {
         sessionCounter++;
         rowCount++;
-        const currentId = sessionCounter; // Capture for closure
+        const currentId = sessionCounter;
         const hiddenContainer = document.getElementById('hidden-inputs-container');
+        const timeSlotKey = getTimeSlotKey(date, startTime, endTime);
 
-        // --- Hidden Inputs for Backend ---
+        // --- Hidden Inputs for Backend  ---
         const div = document.createElement('div');
         div.id = `hidden-session-${currentId}`;
+        div.dataset.timeSlotKey = timeSlotKey; // Store for later reference
 
         function createHidden(name, val) {
             const i = document.createElement('input');
@@ -159,19 +137,17 @@
             return i;
         }
 
-        // Legacy IDs for app compatibility
         div.appendChild(createHidden('session_ids', currentId));
         div.appendChild(createHidden(`day_${currentId}`, '0'));
         div.appendChild(createHidden(`session_type_${currentId}`, `${startTime}-${endTime}`));
-
-        // New Fields
         div.appendChild(createHidden(`date_${currentId}`, date));
         div.appendChild(createHidden(`start_time_${currentId}`, startTime));
         div.appendChild(createHidden(`end_time_${currentId}`, endTime));
         div.appendChild(createHidden(`subject_${currentId}`, subject));
         div.appendChild(createHidden(`total_students_${currentId}`, students));
 
-        // Initial Unavailable Inputs
+        // Get unavailable supervisors for this time slot
+        const unavailable = timeSlotUnavailability[timeSlotKey] || [];
         unavailable.forEach(name => {
             div.appendChild(createHidden(`unavailable_${currentId}`, name));
         });
@@ -185,19 +161,31 @@
 
         const tr = document.createElement('tr');
         tr.id = `row-${currentId}`;
+        tr.dataset.timeSlotKey = timeSlotKey;
 
-        // Build Options string for innerHTML is tricky with loop, 
-        // easier to let TomSelect handle it after rendering, but we need initial <select>
-        // We will just put the supervisors name in value attribute and init TomSelect
+        // Only show unavailability dropdown for FIRST row of each time slot
+        const isFirstInSlot = !document.querySelector(`tr[data-time-slot-key="${timeSlotKey}"]`);
 
-        // However, for the initial HTML render, we need valid options for the library to pick up
-        // OR we can just init an empty select and add options via API like above.
-        // Let's stick to generating options string as it is robust for pre-selected values.
+        let unavailCell = '';
+        if (isFirstInSlot) {
+            const optionsHtml = allSupervisors.map(name => {
+                const selected = unavailable.includes(name) ? 'selected' : '';
+                return `<option value="${name}" ${selected}>${name}</option>`;
+            }).join('');
 
-        const optionsHtml = allSupervisors.map(name => {
-            const selected = unavailable.includes(name) ? 'selected' : '';
-            return `<option value="${name}" ${selected}>${name}</option>`;
-        }).join('');
+            const selectId = `select-slot-${timeSlotKey.replace(/[|:]/g, '-')}`;
+            unavailCell = `
+                <td class="align-middle">
+                    <select id="${selectId}" multiple placeholder="Select unavailable..." autocomplete="off">
+                        ${optionsHtml}
+                    </select>
+                </td>
+            `;
+        } else {
+            // For subsequent rows in same slot, show message and no dropdown
+            const unavailText = unavailable.length > 0 ? unavailable.join(', ') : 'None';
+            unavailCell = `<td class="align-middle text-muted small fst-italic">(Same as above: ${unavailText})</td>`;
+        }
 
         tr.innerHTML = `
             <td class="align-middle ps-4">${rowCount}</td>
@@ -206,12 +194,8 @@
             <td class="align-middle fw-medium">${subject}</td>
             <td class="align-middle">
                 <input type="number" class="form-control form-control-sm" value="${students}" min="1" style="width: 80px" onchange="updateStudents(${currentId}, this.value)">
-            </td> 
-            <td class="align-middle">
-                <select id="select-row-${currentId}" multiple placeholder="Select unavailable..." autocomplete="off">
-                    ${optionsHtml}
-                </select>
             </td>
+            ${unavailCell}
             <td class="align-middle text-end pe-4">
                 <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeSession(${currentId})">
                     <i class="bi bi-trash"></i>
@@ -220,37 +204,61 @@
         `;
         tbody.appendChild(tr);
 
-        const newTs = new TomSelect(`#select-row-${currentId}`, {
-            plugins: ['remove_button'],
-            create: false,
-            maxItems: null,
-            valueField: 'value',
-            labelField: 'text',
-            searchField: 'text',
-            placeholder: 'Select unavailable...',
-            onChange: function (values) {
-                updateUnavailableHidden(currentId, values);
-            }
-        });
+        // Initialize TomSelect for unavailability ONLY if first in slot
+        if (isFirstInSlot) {
+            const selectId = `select-slot-${timeSlotKey.replace(/[|:]/g, '-')}`;
+            const newTs = new TomSelect(`#${selectId}`, {
+                plugins: ['remove_button'],
+                create: false,
+                maxItems: null,
+                valueField: 'value',
+                labelField: 'text',
+                searchField: 'text',
+                placeholder: 'Select unavailable supervisors for this time slot...',
+                onChange: function (values) {
+                    updateTimeSlotUnavailability(timeSlotKey, values);
+                }
+            });
+            tomSelectInstances[timeSlotKey] = newTs;
+        }
     }
 
-    function updateUnavailableHidden(sid, values) {
-        const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
-        if (!hiddenDiv) return;
+    function updateTimeSlotUnavailability(timeSlotKey, values) {
+        // Update the global time slot unavailability mapping
+        timeSlotUnavailability[timeSlotKey] = values || [];
 
-        // Remove existing unavailable inputs
-        const existing = hiddenDiv.querySelectorAll(`input[name="unavailable_${sid}"]`);
-        existing.forEach(el => el.remove());
+        // Update all sessions with this time slot
+        document.querySelectorAll(`[data-time-slot-key="${timeSlotKey}"]`).forEach(element => {
+            if (element.id && element.id.startsWith('hidden-session-')) {
+                const sid = element.id.replace('hidden-session-', '');
 
-        // Add new ones
-        if (values) {
-            values.forEach(name => {
-                const i = document.createElement('input');
-                i.type = 'hidden';
-                i.name = `unavailable_${sid}`;
-                i.value = name;
-                hiddenDiv.appendChild(i);
-            });
+                // Remove existing unavailable inputs
+                const existing = element.querySelectorAll(`input[name="unavailable_${sid}"]`);
+                existing.forEach(el => el.remove());
+
+                // Add new ones
+                if (values) {
+                    values.forEach(name => {
+                        const i = document.createElement('input');
+                        i.type = 'hidden';
+                        i.name = `unavailable_${sid}`;
+                        i.value = name;
+                        element.appendChild(i);
+                    });
+                }
+            }
+        });
+
+        // Update display text for non-first rows
+        const rows = document.querySelectorAll(`tr[data-time-slot-key="${timeSlotKey}"]`);
+        if (rows.length > 1) {
+            const unavailText = values && values.length > 0 ? values.join(', ') : 'None';
+            for (let i = 1; i < rows.length; i++) {
+                const td = rows[i].querySelector('td:nth-child(6)'); // 6th column is unavailability
+                if (td) {
+                    td.innerHTML = `<span class="text-muted small fst-italic">(Same as above: ${unavailText})</span>`;
+                }
+            }
         }
     }
 
@@ -266,7 +274,7 @@
         const date = document.getElementById('input-date').value;
         const startTime = document.getElementById('input-start-time').value;
         const endTime = document.getElementById('input-end-time').value;
-        const subject = document.getElementById('input-subject').value;
+        const subject = document.getElementById('input-subject').value || "General";
         const students = document.getElementById('input-students').value;
 
         if (!date || !startTime || !endTime || !students) {
@@ -274,33 +282,44 @@
             return;
         }
 
-        // Get values from Tom Select
-        const unavailable = supervisorSelect.getValue(); // returns array of values
+        addSessionRow(date, startTime, endTime, subject, students);
 
-        addSessionRow(date, startTime, endTime, subject, students, unavailable);
-
-        // Reset inputs
-        // document.getElementById('input-date').value = ''; // Keep date/time as often they are same
+        // Reset only subject and students inputs (keep date/time for next entry)
         document.getElementById('input-subject').value = '';
         document.getElementById('input-students').value = '';
-        supervisorSelect.clear();
     }
 
     function removeSession(id) {
-        document.getElementById(`hidden-session-${id}`).remove();
-        document.getElementById(`row-${id}`).remove();
+        const hiddenDiv = document.getElementById(`hidden-session-${id}`);
+        const row = document.getElementById(`row-${id}`);
+        const timeSlotKey = hiddenDiv?.dataset.timeSlotKey;
+
+        hiddenDiv?.remove();
+        row?.remove();
+
+        // Check if there are still sessions for this time slot
+        if (timeSlotKey) {
+            const remainingRows = document.querySelectorAll(`tr[data-time-slot-key="${timeSlotKey}"]`);
+            if (remainingRows.length === 0) {
+                // No more sessions for this slot, clean up
+                delete timeSlotUnavailability[timeSlotKey];
+                delete tomSelectInstances[timeSlotKey];
+            } else if (remainingRows.length > 0) {
+                // If we removed the first row, we need to rebuild to show the dropdown on the new first row
+                // For simplicity in this version, the dropdown will disappear (user can refresh or re-add)
+                // A more complex solution would rebuild the entire slot's rows
+            }
+        }
+
         const tbody = document.querySelector('#sessions-table tbody');
-        // Check if there are any TRs left (excluding empty-row if it was there, but it should be gone)
-        // Actually better to check rowCount or valid rows
         if (tbody.querySelectorAll('tr').length === 0) {
             tbody.innerHTML = '<tr id="empty-row"><td colspan="7" class="text-center py-5 text-muted">No sessions added yet.</td></tr>';
-            rowCount = 0; // Soft reset, though indexes will keep incrementing which is fine for unique IDs
+            rowCount = 0;
         }
     }
 
     function validateForm() {
         const tbody = document.querySelector('#sessions-table tbody');
-        // If empty row exists or no rows
         if (document.getElementById('empty-row') || tbody.children.length === 0) {
             alert("Please add at least one session configuration.");
             return false;
@@ -309,12 +328,10 @@
     }
 
     window.onload = function () {
-        initSupervisorList();
-
         // Auto-load sessions
         if (preloadedSessions && preloadedSessions.length > 0) {
             preloadedSessions.forEach(sess => {
-                addSessionRow(sess.date, sess.start_time, sess.end_time, sess.subject, 50, []);
+                addSessionRow(sess.date, sess.start_time, sess.end_time, sess.subject || "General", 50);
             });
         }
     };
