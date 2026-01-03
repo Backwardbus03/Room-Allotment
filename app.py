@@ -460,13 +460,6 @@ def generate():
         except:
             unavailability_rules = []
         
-        with open('debug_log.txt', 'w') as f:
-            f.write(f"Rooms count: {len(rooms)}\n")
-            f.write(f"Supervisors count: {len(supervisors)}\n")
-            f.write(f"Session IDs: {session_ids}\n")
-            f.write(f"Unavailability Rules: {json.dumps(unavailability_rules, indent=2)}\n")
-            f.write("Form Keys: " + str(list(request.form.keys())) + "\n")
-        
         sessions_data = []
         for sid in session_ids:
             # Try new fields first
@@ -517,9 +510,6 @@ def generate():
                      item['subject'] = "General"
                 
                 sessions_data.append(item)
-        
-        with open('debug_log.txt', 'a') as f:
-            f.write(f"Constructed Sessions Data: {json.dumps(sessions_data, indent=2)}\n")
 
         # Generate
         result = scheduler.generate_schedule(rooms, supervisors, sessions_data)
