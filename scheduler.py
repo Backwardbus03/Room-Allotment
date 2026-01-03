@@ -70,6 +70,7 @@ def generate_schedule(rooms, supervisors, sessions_data):
                     'sess_id': sess_id,
                     'count': take,
                     'subject': sess.get('subject', 'General'),
+                    'department': sess.get('department', ''),
                     'date_disp': date_raw,
                     'time_disp': time_raw
                 })
@@ -236,6 +237,7 @@ def generate_schedule(rooms, supervisors, sessions_data):
                 "Date": sess_info['date_disp'],
                 "Time": sess_info['time_disp'],
                 "Subject": sess_info['subject'],
+                "Department": sess_info.get('department', ''),
                 "Count": sess_info.get('count', 0),
                 "Block": task['block'],
                 "Role": task['display_role'],

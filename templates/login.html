@@ -54,7 +54,7 @@
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link rounded py-2 small fw-bold" id="pills-register-tab" data-bs-toggle="pill"
-                        data-bs-target="#pills-register" type="button" role="tab">Register</button>
+                        data-bs-target="#pills-register" type="button" role="tab">Reset Password</button>
                 </li>
             </ul>
 
@@ -95,20 +95,27 @@
                     </form>
                 </div>
 
-                <!-- Register Form -->
+                <!-- Reset Password Form -->
                 <div class="tab-pane fade" id="pills-register" role="tabpanel">
-                    <form action="/register" method="POST">
+                    <form action="/reset_password" method="POST">
                         <div class="mb-3">
                             <label class="form-label text-muted small fw-bold text-uppercase">Full Name</label>
                             <input type="text" name="name" class="form-control form-control-lg bg-light border-0"
                                 required placeholder="Your Name">
                         </div>
-                        <div class="mb-4">
-                            <label class="form-label text-muted small fw-bold text-uppercase">Set Password</label>
-                            <input type="password" name="password"
+                        <div class="mb-3">
+                            <label class="form-label text-muted small fw-bold text-uppercase">Old Password</label>
+                            <input type="password" name="old_password"
                                 class="form-control form-control-lg bg-light border-0" required placeholder="••••••••">
                         </div>
-                        <button type="submit" class="btn btn-dark btn-lg w-100 shadow-sm fw-bold fs-6">Register</button>
+                        <div class="mb-4">
+                            <label class="form-label text-muted small fw-bold text-uppercase">New Password</label>
+                            <input type="password" name="new_password"
+                                class="form-control form-control-lg bg-light border-0" required placeholder="••••••••">
+                        </div>
+                        <button type="submit"
+                            class="btn btn-warning btn-lg w-100 shadow-sm fw-bold fs-6 text-white">Reset
+                            Password</button>
                     </form>
                 </div>
             </div>

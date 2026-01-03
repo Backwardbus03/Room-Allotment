@@ -3,6 +3,12 @@ import pdfplumber
 import pandas as pd
 import re
 from datetime import datetime
+import google.genai as genai
+import os
+import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def normalize_date(date_str):
     """
@@ -152,13 +158,14 @@ def extract_sessions_from_pdf(pdf_path):
                                     subj_text = row[subj_idx]
                                     if len(subj_text) > 2 and "---" not in subj_text:
                                         subj_clean = subj_text.replace('\n', ' ')
-                                        final_subject = f"{subj_clean} ({stream_name})"
+                                        subj_clean = subj_text.replace('\n', ' ')
                                         
                                         sessions.append({
                                             "date": normalize_date(d_to_use),
                                             "start_time": start_t,
                                             "end_time": end_t,
-                                            "subject": final_subject
+                                            "subject": subj_clean,
+                                            "department": stream_name
                                         })
                     except ValueError:
                         pass
@@ -183,7 +190,8 @@ def extract_sessions_from_pdf(pdf_path):
                                     "date": normalize_date(date_val),
                                     "start_time": start_t,
                                     "end_time": end_t,
-                                    "subject": subj_val
+                                    "subject": subj_val,
+                                    "department": ""
                                 })
     return sessions
 
@@ -204,8 +212,83 @@ def extract_to_excel(pdf_path, excel_path):
 
     if all_data:
         df = pd.DataFrame(all_data)
-        # Save to Excel
-        df.to_excel(excel_path, index=False, header=False)
-        print(f"Successfully extracted {len(all_data)} rows to {excel_path}")
-    else:
-        print("No tabular data found in the PDF.")
+
+
+
+def parse_schedule_with_gemini(pdf_path):
+    """
+    Parses the schedule PDF using Gemini API via google-genai SDK.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("Error: GEMINI_API_KEY not found in .env")
+        return []
+
+    try:
+        from google import genai
+        from google.genai import types
+        
+        client = genai.Client(api_key=api_key)
+        
+        # Upload the file using new SDK
+        # The argument might be 'file' or positional. Let's try 'file'.
+        file_upload = client.files.upload(file=pdf_path)
+        
+        prompt = """
+        You are an expert data extraction assistant extracting data from an exam schedule PDF.
+        
+        Extract all exam sessions from the document into a JSON list.
+        Each item in the list must have the following fields:
+        - "date": Date of the exam in YYYY-MM-DD format.
+        - "start_time": Start time in HH:MM (24-hour) format.
+        - "end_time": End time in HH:MM (24-hour) format.
+        - "subject": The full name of the subject/paper.
+        - "department": The department or stream (e.g., CSE, MECH, MBA) if clearly identifiable, else empty string.
+        
+        Rules:
+        1. Ignore header rows or irrelevant text.
+        2. Ensure dates are normalized.
+        3. Convert all times to 24-hour format.
+        4. If a session spans multiple subjects/departments listed in columns, create separate entries for each.
+        5. RETURN ONLY RAW JSON. NO MARKDOWN FORMATTING.
+        """
+        
+        # New model name request
+        model_name = "gemini-2.5-flash" 
+        
+        # Retry logic for handling 503 errors
+        import time
+        max_retries = 3
+        retry_delay = 2  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[file_upload, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
+                )
+                break # Success, exit loop
+            except Exception as e:
+                # Check for 503 or overload in error message
+                error_str = str(e)
+                if attempt < max_retries - 1 and ("503" in error_str or "overloaded" in error_str.lower()):
+                    print(f"Gemini overloaded (Attempt {attempt+1}/{max_retries}). Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    raise e # Re-raise if out of retries or unknown error
+
+        try:
+            return json.loads(response.text)
+        except (json.JSONDecodeError, TypeError):
+             # Clean up
+             text = response.text if response.text else ""
+             text = text.replace('```json', '').replace('```', '').strip()
+             return json.loads(text)
+        
+    except Exception as e:
+        print(f"Error parsing with Gemini: {e}")
+        return []

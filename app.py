@@ -58,8 +58,13 @@ def aggregate_schedule_rows(schedule_list):
         
         # Add subject info
         subj = row.get('Subject', 'Unknown')
+        dept = row.get('Department', '')
         count = row.get('Count', 0)
-        grouped[key]['Subjects'].append(f"{subj} ({count})")
+        
+        if dept:
+            grouped[key]['Subjects'].append(f"{subj} ({dept}) ({count})")
+        else:
+            grouped[key]['Subjects'].append(f"{subj} ({count})")
 
     # Reconstruct list
     aggregated_list = []
@@ -251,17 +256,26 @@ def login():
                 
     return render_template('login.html')
 
-@app.route('/register', methods=['POST'])
-def register():
+@app.route('/reset_password', methods=['POST'])
+def reset_password():
     name = request.form.get('name').strip()
-    password = request.form.get('password')
+    old_password = request.form.get('old_password')
+    new_password = request.form.get('new_password')
     
-    if not name or not password:
-        flash("Name and Password are required.")
+    if not name or not old_password or not new_password:
+        flash("All fields are required.")
         return redirect(url_for('login'))
         
-    success, msg = db.create_supervisor(name, password)
-    flash(msg)
+    # Verify Old Password
+    if db.verify_supervisor(name, old_password):
+        # Update to New Password
+        if db.update_supervisor_password(name, new_password):
+            flash("Password updated successfully. Please login.")
+        else:
+            flash("Error updating password. Please try again.")
+    else:
+        flash("Invalid Name or Old Password.")
+        
     return redirect(url_for('login'))
 
 @app.route('/logout')
@@ -507,8 +521,18 @@ def configure():
                 pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
                 pdf.save(pdf_path)
                 try:
-                    preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
-                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.", "info")
+                    # Try Gemini first if API Key exists
+                    if os.getenv('GEMINI_API_KEY'):
+                        flash("Attempting PDF extraction with Gemini...")
+                        preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
+                    
+                    # Fallback or if Gemini returns empty
+                    if not preloaded_sessions:
+                        if os.getenv('GEMINI_API_KEY'):
+                             flash("Gemini returned no data, falling back to local extractor.")
+                        preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
+                    
+                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
                 except Exception as ex:
                     flash(f"Error extracting PDF: {str(ex)}", "warning")
         
@@ -538,13 +562,6 @@ def generate():
         except:
             unavailability_rules = []
         
-        with open('debug_log.txt', 'w') as f:
-            f.write(f"Rooms count: {len(rooms)}\n")
-            f.write(f"Supervisors count: {len(supervisors)}\n")
-            f.write(f"Session IDs: {session_ids}\n")
-            f.write(f"Unavailability Rules: {json.dumps(unavailability_rules, indent=2)}\n")
-            f.write("Form Keys: " + str(list(request.form.keys())) + "\n")
-        
         sessions_data = []
         for sid in session_ids:
             # Try new fields first
@@ -552,6 +569,7 @@ def generate():
             start_time_val = request.form.get(f'start_time_{sid}')
             end_time_val = request.form.get(f'end_time_{sid}')
             subject_val = request.form.get(f'subject_{sid}')
+            department_val = request.form.get(f'department_{sid}')
             
             # Fallback / Compatibility
             day = request.form.get(f'day_{sid}')
@@ -573,6 +591,7 @@ def generate():
                     # Use formatted combined string for Scheduler Slot Key
                     item['time'] = f"{start_time_val} - {end_time_val}"
                     item['subject'] = subject_val or "General"
+                    item['department'] = department_val or ""
                     # Legacy fields just in case
                     item['day'] = 0 
                     item['session'] = item['time']
@@ -595,9 +614,6 @@ def generate():
                      item['subject'] = "General"
                 
                 sessions_data.append(item)
-        
-        with open('debug_log.txt', 'a') as f:
-            f.write(f"Constructed Sessions Data: {json.dumps(sessions_data, indent=2)}\n")
 
         # Generate
         result = scheduler.generate_schedule(rooms, supervisors, sessions_data)
@@ -665,7 +681,8 @@ def generate():
                                schedule_table=schedule_html, 
                                schedule_data=schedule_data,
                                main_allocations=main_allocations,
-                               backup_allocations=backup_allocations)
+                               backup_allocations=backup_allocations,
+                               exam_name=exam_name)
 
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
@@ -681,6 +698,9 @@ def export_pdf():
     results = db.get_full_schedule(selected_exam)
     if not results:
         return "Error: No data found for this exam.", 400
+
+    # Aggregate rows to match dashboard view (combines subjects/counts)
+    results = aggregate_schedule_rows(results)
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))

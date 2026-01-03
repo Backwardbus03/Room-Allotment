@@ -27,7 +27,7 @@
         </div>
         <div class="card-body">
             <div class="row g-3">
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <label for="input-date" class="form-label fw-bold small text-muted">Date</label>
                     <input type="date" id="input-date" class="form-control">
                 </div>
@@ -39,13 +39,17 @@
                     <label for="input-end-time" class="form-label fw-bold small text-muted">End Time</label>
                     <input type="time" id="input-end-time" class="form-control">
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
+                    <label for="input-department" class="form-label fw-bold small text-muted">Department</label>
+                    <input type="text" id="input-department" class="form-control" placeholder="e.g. CSE">
+                </div>
+                <div class="col-md-2">
                     <label for="input-subject" class="form-label fw-bold small text-muted">Subject</label>
-                    <input type="text" id="input-subject" class="form-control" placeholder="e.g. Intro to Bio">
+                    <input type="text" id="input-subject" class="form-control" placeholder="Subject Name">
                 </div>
                 <div class="col-md-2">
                     <label for="input-students" class="form-label fw-bold small text-muted">Students</label>
-                    <input type="number" id="input-students" class="form-control" min="1" placeholder="e.g. 50">
+                    <input type="number" id="input-students" class="form-control" min="1" placeholder="Count">
                 </div>
             </div>
 
@@ -71,6 +75,10 @@
                             <th class="ps-4" style="width: 50px;">#</th>
                             <th style="width: 120px; white-space: nowrap;">Date</th>
                             <th style="width: 150px; white-space: nowrap;">Time</th>
+                            <th class="ps-4">#</th>
+                            <th>Date</th>
+                            <th>Time</th>
+                            <th>Department</th>
                             <th>Subject</th>
                             <th style="width: 100px;">Students</th>
                             <th style="width: 25%;">Unavailable Supervisors</th>
@@ -80,6 +88,8 @@
                     </thead>
                     <tbody>
                         <tr id="empty-row">
+                            <td colspan="8" class="text-center py-5 text-muted">
+                                <div class="mb-2"><i class="bi bi-list-task fs-3"></i></div>
                             <td colspan="8" class="text-center py-5 text-muted">
                                 <div class="mb-2"><i class="bi bi-list-task fs-3"></i></div>
                                 No sessions added yet. Use the form above to add one.
@@ -130,7 +140,7 @@
         return `${date}|${startTime}|${endTime}`;
     }
 
-    function addSessionRow(date, startTime, endTime, subject, students) {
+    function addSessionRow(date, startTime, endTime, subject, department, students) {
         sessionCounter++;
         rowCount++;
         const currentId = sessionCounter;
@@ -156,7 +166,9 @@
         div.appendChild(createHidden(`date_${currentId}`, date));
         div.appendChild(createHidden(`start_time_${currentId}`, startTime));
         div.appendChild(createHidden(`end_time_${currentId}`, endTime));
+        div.appendChild(createHidden(`end_time_${currentId}`, endTime));
         div.appendChild(createHidden(`subject_${currentId}`, subject));
+        div.appendChild(createHidden(`department_${currentId}`, department));
         div.appendChild(createHidden(`total_students_${currentId}`, students));
 
         // Get unavailable supervisors for this time slot
@@ -214,6 +226,7 @@
             <td class="align-middle ps-4">${rowCount}</td>
             <td class="align-middle">${date}</td>
             <td class="align-middle">${startTime} - ${endTime}</td>
+            <td class="align-middle fw-medium text-primary shadow-sm small border rounded px-2 bg-light">${department || '-'}</td>
             <td class="align-middle fw-medium">${subject}</td>
             <td class="align-middle">
                 <input type="number" class="form-control form-control-sm" value="${students}" min="1" style="width: 80px" onchange="updateStudents(${currentId}, this.value)">
@@ -300,6 +313,7 @@
         const startTime = document.getElementById('input-start-time').value;
         const endTime = document.getElementById('input-end-time').value;
         const subject = document.getElementById('input-subject').value || "General";
+        const department = document.getElementById('input-department').value || "";
         const students = document.getElementById('input-students').value;
 
         if (!date || !startTime || !endTime || !students) {
@@ -307,10 +321,11 @@
             return;
         }
 
-        addSessionRow(date, startTime, endTime, subject, students);
+        addSessionRow(date, startTime, endTime, subject, department, students);
 
-        // Reset only subject and students inputs (keep date/time for next entry)
+        // Reset only subject, department and students inputs (keep date/time for next entry)
         document.getElementById('input-subject').value = '';
+        document.getElementById('input-department').value = '';
         document.getElementById('input-students').value = '';
     }
 
@@ -338,7 +353,10 @@
 
         const tbody = document.querySelector('#sessions-table tbody');
         if (tbody.querySelectorAll('tr').length === 0) {
-            tbody.innerHTML = '<tr id="empty-row"><td colspan="7" class="text-center py-5 text-muted">No sessions added yet.</td></tr>';
+            if (tbody.querySelectorAll('tr').length === 0) {
+                tbody.innerHTML = '<tr id="empty-row"><td colspan="8" class="text-center py-5 text-muted">No sessions added yet.</td></tr>';
+                rowCount = 0;
+            }
             rowCount = 0;
         }
     }
@@ -356,7 +374,7 @@
         // Auto-load sessions
         if (preloadedSessions && preloadedSessions.length > 0) {
             preloadedSessions.forEach(sess => {
-                addSessionRow(sess.date, sess.start_time, sess.end_time, sess.subject || "General", 50);
+                addSessionRow(sess.date, sess.start_time, sess.end_time, sess.subject || "General", sess.department || "", 50);
             });
         }
     };
