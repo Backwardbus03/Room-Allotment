@@ -58,8 +58,13 @@ def aggregate_schedule_rows(schedule_list):
         
         # Add subject info
         subj = row.get('Subject', 'Unknown')
+        dept = row.get('Department', '')
         count = row.get('Count', 0)
-        grouped[key]['Subjects'].append(f"{subj} ({count})")
+        
+        if dept:
+            grouped[key]['Subjects'].append(f"{subj} ({dept}) ({count})")
+        else:
+            grouped[key]['Subjects'].append(f"{subj} ({count})")
 
     # Reconstruct list
     aggregated_list = []
@@ -430,7 +435,17 @@ def configure():
                 pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
                 pdf.save(pdf_path)
                 try:
-                    preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
+                    # Try Gemini first if API Key exists
+                    if os.getenv('GEMINI_API_KEY'):
+                        flash("Attempting PDF extraction with Gemini...")
+                        preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
+                    
+                    # Fallback or if Gemini returns empty
+                    if not preloaded_sessions:
+                        if os.getenv('GEMINI_API_KEY'):
+                             flash("Gemini returned no data, falling back to local extractor.")
+                        preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
+                    
                     flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
                 except Exception as ex:
                     flash(f"Error extracting PDF: {str(ex)}")
@@ -467,6 +482,7 @@ def generate():
             start_time_val = request.form.get(f'start_time_{sid}')
             end_time_val = request.form.get(f'end_time_{sid}')
             subject_val = request.form.get(f'subject_{sid}')
+            department_val = request.form.get(f'department_{sid}')
             
             # Fallback / Compatibility
             day = request.form.get(f'day_{sid}')
@@ -488,6 +504,7 @@ def generate():
                     # Use formatted combined string for Scheduler Slot Key
                     item['time'] = f"{start_time_val} - {end_time_val}"
                     item['subject'] = subject_val or "General"
+                    item['department'] = department_val or ""
                     # Legacy fields just in case
                     item['day'] = 0 
                     item['session'] = item['time']
@@ -577,7 +594,8 @@ def generate():
                                schedule_table=schedule_html, 
                                schedule_data=schedule_data,
                                main_allocations=main_allocations,
-                               backup_allocations=backup_allocations)
+                               backup_allocations=backup_allocations,
+                               exam_name=exam_name)
 
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
@@ -593,6 +611,9 @@ def export_pdf():
     results = db.get_full_schedule(selected_exam)
     if not results:
         return "Error: No data found for this exam.", 400
+
+    # Aggregate rows to match dashboard view (combines subjects/counts)
+    results = aggregate_schedule_rows(results)
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
