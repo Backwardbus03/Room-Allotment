@@ -282,12 +282,44 @@ def parse_schedule_with_gemini(pdf_path):
                     raise e # Re-raise if out of retries or unknown error
 
         try:
-            return json.loads(response.text)
+            raw_data = json.loads(response.text)
         except (json.JSONDecodeError, TypeError):
              # Clean up
              text = response.text if response.text else ""
              text = text.replace('```json', '').replace('```', '').strip()
-             return json.loads(text)
+             raw_data = json.loads(text)
+        
+        # Map department names to short codes
+        # Order matters! Check more specific patterns first
+        dept_mapping = [
+            ('electronics and computer', 'EXCS'),
+            ('electronics & computer', 'EXCS'),
+            ('computer engineering', 'CMPN'),
+            ('computer', 'CMPN'),
+            ('information technology', 'INFT'),
+            ('information', 'INFT'),
+            ('electronics & telecommunication', 'EXTC'),
+            ('electronics and telecommunication', 'EXTC'),
+            ('telecommunication', 'EXTC'),
+            ('biomedical', 'BIOM'),
+            ('cmpn', 'CMPN'),
+            ('inft', 'INFT'),
+            ('excs', 'EXCS'),
+            ('extc', 'EXTC'),
+            ('biom', 'BIOM')
+        ]
+        
+        # Process and shorten department names
+        for session in raw_data:
+            if 'department' in session and session['department']:
+                dept_lower = session['department'].lower().strip()
+                # Try exact match or partial match in order
+                for pattern, short_code in dept_mapping:
+                    if pattern in dept_lower:
+                        session['department'] = short_code
+                        break
+        
+        return raw_data
         
     except Exception as e:
         print(f"Error parsing with Gemini: {e}")
