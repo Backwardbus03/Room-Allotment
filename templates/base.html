@@ -9,26 +9,31 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
     <!-- Tom Select CSS (Optional, load only if needed or globally) -->
     <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
 
     <style>
         :root {
-            --primary-color: #4f46e5;
-            /* Indigo 600 */
-            --primary-hover: #4338ca;
-            /* Indigo 700 */
+            /* Light Minimal Theme - Enhanced & Modern */
+            --primary-color: #0891b2;
+            --primary-hover: #0e7490;
+            --primary-glow: rgba(8, 145, 178, 0.3);
             --secondary-color: #64748b;
-            /* Slate 500 */
-            --background-color: #f8fafc;
-            /* Slate 50 */
+            --background-color: #fafafa;
             --surface-color: #ffffff;
-            --text-main: #0f172a;
-            /* Slate 900 */
+            --text-main: #1e293b;
             --text-muted: #64748b;
-            /* Slate 500 */
             --border-color: #e2e8f0;
-            /* Slate 200 */
+            --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 12px -1px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            --gradient-primary: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);
+        }
+
+        * {
+            transition: background-color 0.2s ease, border-color 0.2s ease;
         }
 
         body {
@@ -40,24 +45,71 @@
             flex-direction: column;
         }
 
-        /* Navbar */
+        /* Smooth page entrance animation */
+        main {
+            animation: fadeInUp 0.5s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Navbar with glassmorphism */
         .navbar {
-            background-color: var(--surface-color);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-            padding-top: 0.75rem;
-            padding-bottom: 0.75rem;
+            padding: 1rem 0;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
         }
 
         .navbar-brand {
             font-weight: 700;
-            color: var(--primary-color) !important;
-            font-size: 1.25rem;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 1.5rem;
+            letter-spacing: -0.03em;
+            transition: transform 0.2s ease;
+        }
+
+        .navbar-brand:hover {
+            transform: scale(1.05);
         }
 
         .nav-link {
             color: var(--text-muted);
             font-weight: 500;
-            transition: color 0.15s ease-in-out;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--gradient-primary);
+            transition: width 0.3s ease;
+        }
+
+        .nav-link:hover::after,
+        .nav-link.active::after {
+            width: 100%;
         }
 
         .nav-link:hover,
@@ -65,55 +117,135 @@
             color: var(--primary-color);
         }
 
-        /* Buttons */
+        /* Enhanced Buttons */
         .btn-primary {
-            background-color: var(--primary-color);
-            border-color: var(--primary-color);
+            background: var(--gradient-primary);
+            border: none;
+            box-shadow: 0 4px 6px rgba(8, 145, 178, 0.2);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .btn-primary:hover::before {
+            left: 100%;
         }
 
         .btn-primary:hover {
-            background-color: var(--primary-hover);
-            border-color: var(--primary-hover);
+            box-shadow: 0 8px 16px rgba(8, 145, 178, 0.3);
+            transform: translateY(-2px);
         }
 
-        /* Flash Messages */
+        .btn-primary:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(8, 145, 178, 0.2);
+        }
+
+        /* Flash Messages - Enhanced */
         .flash-container {
-            max-width: 1000px;
-            margin: 1rem auto 0;
-            padding: 0 1rem;
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            z-index: 9999;
+            max-width: 400px;
+            min-width: 320px;
+        }
+
+        .flash-container .alert {
+            margin-bottom: 12px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            animation: slideInRight 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes slideInRight {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideOutRight {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+
+        .flash-container .alert.fade-out {
+            animation: slideOutRight 0.3s ease-out forwards;
         }
 
         /* Main Content */
         main {
             flex: 1;
-            padding: 2rem 0;
-        }
-
-        /* Footer */
-        .footer {
-            background-color: var(--surface-color);
-            border-top: 1px solid var(--border-color);
             padding: 1.5rem 0;
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 0.875rem;
-            margin-top: auto;
         }
 
-        /* Card Utils */
+        /* Enhanced Cards with animations */
         .card {
             border: 1px solid var(--border-color);
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-            border-radius: 0.5rem;
+            box-shadow: var(--shadow-sm);
+            border-radius: 1rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: var(--surface-color);
+            animation: fadeInUp 0.5s ease-out backwards;
+        }
+
+        .card:nth-child(1) {
+            animation-delay: 0.1s;
+        }
+
+        .card:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .card:nth-child(3) {
+            animation-delay: 0.3s;
+        }
+
+        .card:hover {
+            box-shadow: var(--shadow-md);
+            border-color: rgba(8, 145, 178, 0.3);
         }
 
         .card-header {
-            background-color: transparent;
+            background: linear-gradient(135deg, rgba(8, 145, 178, 0.05) 0%, rgba(6, 182, 212, 0.05) 100%);
             border-bottom: 1px solid var(--border-color);
             font-weight: 600;
-            padding: 1rem 1.25rem;
+            padding: 1.25rem 1.5rem;
+            border-radius: 1rem 1rem 0 0;
+            display: flex;
+            align-items: center;
         }
 
+        .card-body {
+            padding: 1.5rem;
+        }
+
+        /* Enhanced Typography */
         h1,
         h2,
         h3,
@@ -121,26 +253,90 @@
         h5,
         h6 {
             color: var(--text-main);
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.2;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+        }
+
+        h2 {
+            font-size: 2rem;
+        }
+
+        h3 {
+            font-size: 1.75rem;
+        }
+
+        h4 {
+            font-size: 1.5rem;
+        }
+
+        h5 {
+            font-size: 1.25rem;
+        }
+
+        /* Form inputs with focus effects */
+        .form-control:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px var(--primary-glow);
+            transform: scale(1.01);
+            transition: all 0.2s ease;
+        }
+
+        /* Table enhancements */
+        .table {
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        .table thead {
+            background: linear-gradient(135deg, rgba(8, 145, 178, 0.08) 0%, rgba(6, 182, 212, 0.08) 100%);
+        }
+
+        .table tbody tr {
+            transition: all 0.2s ease;
+        }
+
+        .table tbody tr:hover {
+            background-color: rgba(8, 145, 178, 0.05);
+        }
+
+        /* Badge enhancements */
+        .badge {
+            padding: 0.5rem 1rem;
             font-weight: 600;
+            letter-spacing: 0.02em;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease;
         }
 
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
+        .badge:hover {
+            transform: scale(1.1);
         }
 
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
+        /* Button group spacing */
+        .btn {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
-        ::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 4px;
+        .btn:hover {
+            transform: translateY(-1px);
         }
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
+        .btn:active {
+            transform: translateY(0);
         }
     </style>
     {% block head_extra %}{% endblock %}
@@ -148,6 +344,7 @@
 
 <body>
 
+    {% block navbar %}
     <!-- Navigation -->
     <nav class="navbar navbar-expand-lg">
         <div class="container">
@@ -159,16 +356,16 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
-                    {% if session.get('user') %}
+                    {% if session.get('user_role') %}
                     <!-- Admin Links -->
-                    {% if session.get('role') == 'admin' %}
+                    {% if session.get('user_role') == 'admin' %}
                     <li class="nav-item">
                         <a class="nav-link" href="/">Dashboard</a>
                     </li>
                     {% endif %}
                     <!-- Supervisor Links (if any specific) -->
 
-                    <li class="nav-item ms-lg-3">
+                    <li class="nav-item ms-lg-3 d-flex align-items-center">
                         <a class="btn btn-outline-danger btn-sm" href="/logout">Logout</a>
                     </li>
                     {% else %}
@@ -180,6 +377,7 @@
             </div>
         </div>
     </nav>
+    {% endblock %}
 
     <!-- Flash Messages -->
     <div class="flash-container">
@@ -187,7 +385,7 @@
         {% if messages %}
         {% for category, message in messages %}
         <!-- Handle cases where category might just be 'message' -->
-        <div class="alert alert-{{ 'info' if category == 'message' else category }} alert-dismissible fade show"
+        <div class="alert alert-{{ 'info' if category == 'message' else category }} alert-dismissible fade show flash-message"
             role="alert">
             {{ message }}
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
@@ -197,18 +395,28 @@
         {% endwith %}
     </div>
 
+    <script>
+        // Auto-dismiss flash messages after 3 seconds
+        document.addEventListener('DOMContentLoaded', function () {
+            const flashMessages = document.querySelectorAll('.flash-message');
+            flashMessages.forEach(function (message) {
+                setTimeout(function () {
+                    // Add fade-out animation class
+                    message.classList.add('fade-out');
+
+                    // Remove the element after animation completes
+                    setTimeout(function () {
+                        message.remove();
+                    }, 300); // Match animation duration
+                }, 3000); // 3 seconds delay
+            });
+        });
+    </script>
+
     <!-- Content -->
     <main>
         {% block content %}{% endblock %}
     </main>
-
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="container">
-            <p class="mb-0">&copy; {{ now_year if now_year else '2025' }} Exam Scheduler System. All rights reserved.
-            </p>
-        </div>
-    </footer>
 
     <!-- Bootstrap Bundle JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

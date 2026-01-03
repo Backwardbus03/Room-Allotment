@@ -2,13 +2,24 @@
 
 {% block title %}Admin Dashboard - Exam Scheduler{% endblock %}
 
+{% block head_extra %}
+<style>
+    h5.text-primary {
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container">
-    <div class="row g-4">
+    <div class="row g-3">
         <!-- New Schedule Card -->
         <div class="col-md-5">
             <div class="card h-100 border-0 shadow-sm">
-                <div class="card-header bg-white border-bottom-0 pb-0 pt-4">
+                <div class="card-header">
                     <h5 class="card-title fw-bold text-primary mb-0">Create New Schedule</h5>
                 </div>
                 <div class="card-body">
@@ -49,13 +60,13 @@
         <!-- Existing Schedules Card -->
         <div class="col-md-7">
             <div class="card h-100 border-0 shadow-sm">
-                <div class="card-header bg-white border-bottom-0 pb-0 pt-4">
+                <div class="card-header">
                     <h5 class="card-title fw-bold text-secondary mb-0">Generated Schedules</h5>
                 </div>
                 <div class="card-body">
                     {% if exams %}
                     <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0">
+                        <table class="table table-hover align-middle mb-0" id="exams-table">
                             <thead class="table-light small text-uppercase text-muted">
                                 <tr>
                                     <th class="border-0 ps-3">Exam Name</th>
@@ -63,9 +74,9 @@
                                     <th class="border-0 text-end pe-3">Action</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody id="exams-tbody">
                                 {% for exam in exams %}
-                                <tr>
+                                <tr class="exam-row">
                                     <td class="ps-3 fw-medium text-dark">
                                         {{ exam.name }}
                                         {% if exam.issue_count > 0 %}
@@ -86,6 +97,15 @@
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Pagination Controls -->
+                    <div class="d-flex justify-content-between align-items-center mt-3 px-3" id="pagination-container">
+                        <div class="text-muted small" id="pagination-info"></div>
+                        <nav aria-label="Exam schedules pagination">
+                            <ul class="pagination pagination-sm mb-0" id="pagination-controls"></ul>
+                        </nav>
+                    </div>
+
                     {% else %}
                     <div class="text-center py-5">
                         <div class="mb-3 text-muted">
@@ -106,4 +126,109 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Pagination for exam schedules table
+    document.addEventListener('DOMContentLoaded', function () {
+        const rowsPerPage = 8; // Show 8 entries per page to avoid scrolling
+        const rows = document.querySelectorAll('.exam-row');
+        const paginationContainer = document.getElementById('pagination-container');
+        const paginationInfo = document.getElementById('pagination-info');
+        const paginationControls = document.getElementById('pagination-controls');
+
+        if (rows.length === 0) {
+            return; // No rows to paginate
+        }
+
+        const totalPages = Math.ceil(rows.length / rowsPerPage);
+        let currentPage = 1;
+
+        // Hide pagination if only one page
+        if (totalPages <= 1) {
+            paginationContainer.style.display = 'none';
+            return;
+        }
+
+        function displayPage(page) {
+            const start = (page - 1) * rowsPerPage;
+            const end = start + rowsPerPage;
+
+            // Hide all rows
+            rows.forEach(row => row.style.display = 'none');
+
+            // Show only current page rows
+            for (let i = start; i < end && i < rows.length; i++) {
+                rows[i].style.display = '';
+            }
+
+            // Update pagination info
+            const showing = Math.min(end, rows.length);
+            paginationInfo.textContent = `Showing ${start + 1}-${showing} of ${rows.length}`;
+
+            // Update pagination controls
+            renderPagination();
+        }
+
+        function renderPagination() {
+            paginationControls.innerHTML = '';
+
+            // Previous button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
+            prevLi.innerHTML = `<a class="page-link" href="#" aria-label="Previous"><span aria-hidden="true">&laquo;</span></a>`;
+            if (currentPage > 1) {
+                prevLi.querySelector('a').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    currentPage--;
+                    displayPage(currentPage);
+                });
+            }
+            paginationControls.appendChild(prevLi);
+
+            // Page numbers
+            for (let i = 1; i <= totalPages; i++) {
+                // Show first, last, current, and adjacent pages
+                if (i === 1 || i === totalPages || (i >= currentPage - 1 && i <= currentPage + 1)) {
+                    const li = document.createElement('li');
+                    li.className = `page-item ${i === currentPage ? 'active' : ''}`;
+                    li.innerHTML = `<a class="page-link" href="#">${i}</a>`;
+
+                    if (i !== currentPage) {
+                        li.querySelector('a').addEventListener('click', (e) => {
+                            e.preventDefault();
+                            currentPage = i;
+                            displayPage(currentPage);
+                        });
+                    }
+
+                    paginationControls.appendChild(li);
+                } else if (i === currentPage - 2 || i === currentPage + 2) {
+                    // Add ellipsis
+                    const li = document.createElement('li');
+                    li.className = 'page-item disabled';
+                    li.innerHTML = '<span class="page-link">...</span>';
+                    paginationControls.appendChild(li);
+                }
+            }
+
+            // Next button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
+            nextLi.innerHTML = `<a class="page-link" href="#" aria-label="Next"><span aria-hidden="true">&raquo;</span></a>`;
+            if (currentPage < totalPages) {
+                nextLi.querySelector('a').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    currentPage++;
+                    displayPage(currentPage);
+                });
+            }
+            paginationControls.appendChild(nextLi);
+        }
+
+        // Initialize pagination
+        displayPage(1);
+    });
+</script>
 {% endblock %}

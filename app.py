@@ -377,50 +377,127 @@ def admin_dashboard():
 @admin_required
 def configure():
     try:
+        # Check if files are present
         if 'blocks_file' not in request.files or 'supervisors_file' not in request.files:
-            return "Error: Please upload both Excel files."
+            flash("Please upload both Excel files (Blocks/Rooms and Supervisors).", "danger")
+            return redirect(url_for('admin_dashboard'))
             
         blocks_file = request.files['blocks_file']
         supervisors_file = request.files['supervisors_file']
         
-        # Read Rooms
-        df_rooms = pd.read_excel(blocks_file)
-        rooms = []
-        # Format for DB: list of dicts {'name': ..., 'capacity': ...}
-        # Assuming col 0 is Name, col 1 is Capacity
-        for index, row in df_rooms.iterrows():
-            rooms.append({
-                'name': str(row.iloc[0]),
-                'capacity': int(row.iloc[1])
-            })
-            
-        # Read Supervisors
-        df_supervisors = pd.read_excel(supervisors_file)
+        # Check if files were actually selected
+        if not blocks_file.filename or not supervisors_file.filename:
+            flash("Please select both Excel files before proceeding.", "danger")
+            return redirect(url_for('admin_dashboard'))
         
-        # Process Supervisors List
-        supervisors_db_data = []
-        supervisors_names_only = []
+        # Validate file extensions
+        allowed_extensions = {'.xlsx', '.xls'}
+        blocks_ext = os.path.splitext(blocks_file.filename)[1].lower()
+        supervisors_ext = os.path.splitext(supervisors_file.filename)[1].lower()
         
-        # Check if 'Password' column exists, else default
-        has_password = 'Password' in df_supervisors.columns
+        if blocks_ext not in allowed_extensions:
+            flash(f"Blocks/Rooms file must be an Excel file (.xlsx or .xls). Got: {blocks_ext}", "danger")
+            return redirect(url_for('admin_dashboard'))
         
-        # Assuming Name is Col 0
-        for index, row in df_supervisors.iterrows():
-            name = str(row.iloc[0]).strip()
-            if not name or name.lower() == 'nan': continue
+        if supervisors_ext not in allowed_extensions:
+            flash(f"Supervisors file must be an Excel file (.xlsx or .xls). Got: {supervisors_ext}", "danger")
+            return redirect(url_for('admin_dashboard'))
+        
+        # Read Rooms file with validation
+        try:
+            df_rooms = pd.read_excel(blocks_file)
             
-            password = '123456'
-            if has_password:
-                val = row['Password']
-                if pd.notna(val):
-                    password = str(val)
+            # Check if file is empty
+            if df_rooms.empty:
+                flash("Blocks/Rooms Excel file is empty. Please provide room data.", "danger")
+                return redirect(url_for('admin_dashboard'))
             
-            supervisors_db_data.append({'name': name, 'password': password})
-            supervisors_names_only.append(name)
+            # Check if file has at least 2 columns
+            if len(df_rooms.columns) < 2:
+                flash("Blocks/Rooms file must have at least 2 columns (Room No and Capacity).", "danger")
+                return redirect(url_for('admin_dashboard'))
+            
+            # Try to parse rooms
+            rooms = []
+            for index, row in df_rooms.iterrows():
+                try:
+                    room_name = str(row.iloc[0])
+                    capacity_val = row.iloc[1]
+                    
+                    # Validate room name
+                    if not room_name or room_name.lower() == 'nan':
+                        continue
+                    
+                    # Validate capacity is numeric
+                    capacity = int(float(capacity_val))
+                    
+                    rooms.append({
+                        'name': room_name,
+                        'capacity': capacity
+                    })
+                except (ValueError, TypeError) as e:
+                    flash(f"Invalid data in Blocks/Rooms file at row {index + 2}. Capacity must be numeric.", "danger")
+                    return redirect(url_for('admin_dashboard'))
+            
+            # Check if we got any valid rooms
+            if not rooms:
+                flash("No valid rooms found in the Blocks/Rooms file. Please check the file format.", "danger")
+                return redirect(url_for('admin_dashboard'))
+                
+        except Exception as e:
+            flash(f"Error reading Blocks/Rooms file: {str(e)}", "danger")
+            return redirect(url_for('admin_dashboard'))
+        
+        # Read Supervisors file with validation
+        try:
+            df_supervisors = pd.read_excel(supervisors_file)
+            
+            # Check if file is empty
+            if df_supervisors.empty:
+                flash("Supervisors Excel file is empty. Please provide supervisor data.", "danger")
+                return redirect(url_for('admin_dashboard'))
+            
+            # Check if file has at least 1 column
+            if len(df_supervisors.columns) < 1:
+                flash("Supervisors file must have at least 1 column (Name).", "danger")
+                return redirect(url_for('admin_dashboard'))
+            
+            # Process Supervisors List
+            supervisors_db_data = []
+            supervisors_names_only = []
+            
+            # Check if 'Password' column exists, else default
+            has_password = 'Password' in df_supervisors.columns
+            
+            # Assuming Name is Col 0
+            for index, row in df_supervisors.iterrows():
+                name = str(row.iloc[0]).strip()
+                if not name or name.lower() == 'nan': 
+                    continue
+                
+                password = '123456'
+                if has_password:
+                    val = row['Password']
+                    if pd.notna(val):
+                        password = str(val)
+                
+                supervisors_db_data.append({'name': name, 'password': password})
+                supervisors_names_only.append(name)
+            
+            # Check if we got any valid supervisors
+            if not supervisors_names_only:
+                flash("No valid supervisors found in the Supervisors file. Please check the file format.", "danger")
+                return redirect(url_for('admin_dashboard'))
+                
+        except Exception as e:
+            flash(f"Error reading Supervisors file: {str(e)}", "danger")
+            return redirect(url_for('admin_dashboard'))
         
         # SAVE TO DB
         db.upsert_blocks(rooms)
         db.upsert_supervisors(supervisors_db_data)
+        
+        flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_names_only)} supervisors.", "success")
         
         # Check for Timetable PDF
         preloaded_sessions = []
@@ -431,9 +508,9 @@ def configure():
                 pdf.save(pdf_path)
                 try:
                     preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
-                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
+                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.", "info")
                 except Exception as ex:
-                    flash(f"Error extracting PDF: {str(ex)}")
+                    flash(f"Error extracting PDF: {str(ex)}", "warning")
         
         return render_template('configure.html', 
                                rooms_json=json.dumps(rooms), 
@@ -441,7 +518,8 @@ def configure():
                                preloaded_sessions=json.dumps(preloaded_sessions))
                                
     except Exception as e:
-        return f"An error occurred reading/saving files: {str(e)}"
+        flash(f"An unexpected error occurred: {str(e)}", "danger")
+        return redirect(url_for('admin_dashboard'))
 
 @app.route('/generate', methods=['POST'])
 @admin_required
@@ -807,12 +885,19 @@ def supervisor_dashboard():
     selected_exam = request.args.get('exam_name')
     
     my_schedule = []
+    pending_issues = set()  # Store (date, time, block) tuples for sessions with pending issues
     
     try:
         if selected_exam:
             raw_sched = db.get_schedule_for_supervisor(selected_exam, name)
             aggregated = aggregate_schedule_rows(raw_sched)
             my_schedule = calculate_row_spans(aggregated)
+            
+            # Get issues for this supervisor in this exam
+            issues = db.get_open_issues(selected_exam)
+            for issue in issues:
+                if issue.get('supervisor_name') == name:
+                    pending_issues.add((issue.get('date'), issue.get('time'), issue.get('block')))
     except Exception as e:
         flash(f"Error loading schedule: {e}")
             
@@ -820,7 +905,8 @@ def supervisor_dashboard():
                            exams=available_exams, 
                            selected_exam=selected_exam, 
                            schedule=my_schedule, 
-                           name=name)
+                           name=name,
+                           pending_issues=pending_issues)
 
 @app.route('/report_issue', methods=['POST'])
 @login_required
@@ -841,4 +927,6 @@ def report_issue():
     return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # host='0.0.0.0' makes the server accessible on your local network
+    # This allows you to access it from your phone using your computer's IP address
+    app.run(host='0.0.0.0', port=5000, debug=True)
