@@ -106,6 +106,24 @@ def verify_supervisor(name, password):
     finally:
         conn.close()
 
+def update_supervisor_password(name, new_password):
+    """Updates supervisor password. Returns True if successful."""
+    conn = get_connection()
+    if not conn: return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE supervisors SET password = %s WHERE name = %s", (new_password, name))
+        conn.commit()
+        updated = cur.rowcount > 0
+        cur.close()
+        return updated
+    except Exception as e:
+        print(f"Error updating password: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_supervisors():
     """Returns a list of supervisor names."""
     conn = get_connection()

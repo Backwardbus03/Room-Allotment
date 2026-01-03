@@ -256,17 +256,26 @@ def login():
                 
     return render_template('login.html')
 
-@app.route('/register', methods=['POST'])
-def register():
+@app.route('/reset_password', methods=['POST'])
+def reset_password():
     name = request.form.get('name').strip()
-    password = request.form.get('password')
+    old_password = request.form.get('old_password')
+    new_password = request.form.get('new_password')
     
-    if not name or not password:
-        flash("Name and Password are required.")
+    if not name or not old_password or not new_password:
+        flash("All fields are required.")
         return redirect(url_for('login'))
         
-    success, msg = db.create_supervisor(name, password)
-    flash(msg)
+    # Verify Old Password
+    if db.verify_supervisor(name, old_password):
+        # Update to New Password
+        if db.update_supervisor_password(name, new_password):
+            flash("Password updated successfully. Please login.")
+        else:
+            flash("Error updating password. Please try again.")
+    else:
+        flash("Invalid Name or Old Password.")
+        
     return redirect(url_for('login'))
 
 @app.route('/logout')
