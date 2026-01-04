@@ -2,6 +2,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import bcrypt
 
 load_dotenv()
 
@@ -29,7 +30,7 @@ def get_connection():
 def upsert_supervisors(supervisors_list):
     """
     Upserts a list of supervisors. 
-    supervisors_list: [{'name': '...', 'password': '...'}, ...]
+    supervisors_list: [{'name': '...', 'email': '...', 'password': '...'}, ...]
     """
     conn = get_connection()
     if not conn: return
@@ -38,15 +39,20 @@ def upsert_supervisors(supervisors_list):
         cur = conn.cursor()
         
         # We use executemany for bulk upsert
-        # ON CONFLICT(name) DO UPDATE password
+        # ON CONFLICT(email) DO UPDATE password, name
         
-        args = [(s['name'], s['password']) for s in supervisors_list]
+        args = []
+        for s in supervisors_list:
+             # Hash the password
+             hashed_pw = bcrypt.hashpw(s['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+             args.append((s['name'], s['email'], hashed_pw))
+        
         
         query = """
-        INSERT INTO supervisors (name, password) 
-        VALUES (%s, %s) 
-        ON CONFLICT (name) 
-        DO UPDATE SET password = EXCLUDED.password;
+        INSERT INTO supervisors (name, email, password) 
+        VALUES (%s, %s, %s) 
+        ON CONFLICT (email) 
+        DO UPDATE SET password = EXCLUDED.password, name = EXCLUDED.name;
         """
         cur.executemany(query, args)
         conn.commit()
@@ -56,7 +62,7 @@ def upsert_supervisors(supervisors_list):
     finally:
         conn.close()
 
-def create_supervisor(name, password):
+def create_supervisor(name, email, password):
     """
     Creates a new supervisor. 
     Returns (True, "Success") or (False, ErrorMessage).
@@ -66,14 +72,15 @@ def create_supervisor(name, password):
 
     try:
         cur = conn.cursor()
-        query = "INSERT INTO supervisors (name, password) VALUES (%s, %s)"
-        cur.execute(query, (name, password))
+        hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        query = "INSERT INTO supervisors (name, email, password) VALUES (%s, %s, %s)"
+        cur.execute(query, (name, email, hashed_pw))
         conn.commit()
         cur.close()
         return True, "Registration successful"
     except psycopg2.IntegrityError:
-        conn.rollback() # duplicate name likely
-        return False, "Supervisor name already exists"
+        conn.rollback() # duplicate email likely
+        return False, "Supervisor email already exists"
     except Exception as e:
         conn.rollback()
         print(f"Error creating supervisor: {e}")
@@ -81,39 +88,48 @@ def create_supervisor(name, password):
     finally:
         conn.close()
 
-def verify_supervisor(name, password):
-    """Verifies supervisor credentials. Returns True if valid."""
+def verify_supervisor(email, password):
+    """Verifies supervisor credentials. Returns (True, name) if valid, else (False, None)."""
     conn = get_connection()
-    if not conn: return False
+    if not conn: return False, None
 
     try:
         cur = conn.cursor()
-        cur.execute("SELECT password FROM supervisors WHERE name = %s", (name,))
+        cur.execute("SELECT password, name FROM supervisors WHERE email = %s", (email,))
         row = cur.fetchone()
         cur.close()
         
         if row:
-            # In a real app, hash this!
-            # Storing plain text as requested/implied by "excel upload" simplicity
-            db_pass = row[0]
-            if db_pass == password:
-                return True
+            stored_hash = row[0]
+            name = row[1]
+            # Verify using bcrypt
+            # Note: stored_hash should be a string from DB, we encode it to bytes for bcrypt
+            try:
+                if bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8')):
+                    return True, name
+            except ValueError:
+                # Fallback for plain text (during migration transition)
+                if stored_hash == password:
+                    return True, name
                 
-        return False
+        return False, None
     except Exception as e:
         print(f"Error verifying supervisor: {e}")
-        return False
+        return False, None
     finally:
         conn.close()
 
 def update_supervisor_password(name, new_password):
+    # 'name' arg here is actually the email in the new context, will rename internally to email
+    email = name
     """Updates supervisor password. Returns True if successful."""
     conn = get_connection()
     if not conn: return False
 
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE supervisors SET password = %s WHERE name = %s", (new_password, name))
+        hashed_pw = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        cur.execute("UPDATE supervisors SET password = %s WHERE email = %s", (hashed_pw, name))
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()
@@ -125,16 +141,16 @@ def update_supervisor_password(name, new_password):
         conn.close()
 
 def get_all_supervisors():
-    """Returns a list of supervisor names."""
+    """Returns a list of supervisor strings 'Name (Email)'."""
     conn = get_connection()
     if not conn: return []
 
     try:
         cur = conn.cursor()
-        cur.execute("SELECT name FROM supervisors")
+        cur.execute("SELECT name, email FROM supervisors")
         rows = cur.fetchall()
         cur.close()
-        return [row[0] for row in rows]
+        return [f"{row[0]} ({row[1]})" for row in rows]
     except Exception as e:
         print(f"Error fetching supervisors: {e}")
         return []

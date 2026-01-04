@@ -76,14 +76,14 @@
                 <!-- Supervisor Form -->
                 <div class="tab-pane fade" id="pills-supervisor" role="tabpanel">
                     <div class="alert alert-info py-2 small d-flex align-items-center">
-                        <i class="bi bi-info-circle me-2"></i> Use the exact name from records.
+                        <i class="bi bi-info-circle me-2"></i> Use your registered Email.
                     </div>
                     <form method="POST">
                         <input type="hidden" name="role" value="supervisor">
                         <div class="mb-3">
-                            <label class="form-label text-muted small fw-bold text-uppercase">Full Name</label>
-                            <input type="text" name="name" class="form-control form-control-lg bg-light border-0"
-                                required placeholder="e.g. John Doe">
+                            <label class="form-label text-muted small fw-bold text-uppercase">Email Address</label>
+                            <input type="email" name="email" class="form-control form-control-lg bg-light border-0"
+                                required placeholder="e.g. divya.nimbalkar@vit.edu.in">
                         </div>
                         <div class="mb-4">
                             <label class="form-label text-muted small fw-bold text-uppercase">Password</label>
@@ -99,9 +99,9 @@
                 <div class="tab-pane fade" id="pills-register" role="tabpanel">
                     <form action="/reset_password" method="POST">
                         <div class="mb-3">
-                            <label class="form-label text-muted small fw-bold text-uppercase">Full Name</label>
-                            <input type="text" name="name" class="form-control form-control-lg bg-light border-0"
-                                required placeholder="Your Name">
+                            <label class="form-label text-muted small fw-bold text-uppercase">Email Address</label>
+                            <input type="email" name="email" class="form-control form-control-lg bg-light border-0"
+                                required placeholder="Your Email">
                         </div>
                         <div class="mb-3">
                             <label class="form-label text-muted small fw-bold text-uppercase">Old Password</label>

@@ -8,3 +8,4 @@ pdfplumber
 PyMuPDF
 reportlab
 google-genai
+bcrypt

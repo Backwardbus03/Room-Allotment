@@ -240,17 +240,21 @@ def login():
                 flash("Invalid Admin Password")
         
         elif role == 'supervisor':
-            name = request.form.get('name').strip()
+            email = request.form.get('email').strip()
             password = request.form.get('password')
             
             # Verify via DB
             try:
-                if db.verify_supervisor(name, password):
+                success, name = db.verify_supervisor(email, password)
+                if success:
                     session['user_role'] = 'supervisor'
-                    session['user_name'] = name
+                    session['user_name'] = name 
+                    # Use Name (Email) for schedule matching
+                    session['user_identifier'] = f"{name} ({email})" 
+                    session['user_email'] = email
                     return redirect(url_for('supervisor_dashboard'))
                 else:
-                    flash("Invalid Supervisor Name or Password.")
+                    flash("Invalid Supervisor Email or Password.")
             except Exception as e:
                 flash(f"Error accessing database: {e}")
                 
@@ -258,23 +262,24 @@ def login():
 
 @app.route('/reset_password', methods=['POST'])
 def reset_password():
-    name = request.form.get('name').strip()
+    email = request.form.get('email').strip()
     old_password = request.form.get('old_password')
     new_password = request.form.get('new_password')
     
-    if not name or not old_password or not new_password:
+    if not email or not old_password or not new_password:
         flash("All fields are required.")
         return redirect(url_for('login'))
         
     # Verify Old Password
-    if db.verify_supervisor(name, old_password):
+    success, _ = db.verify_supervisor(email, old_password)
+    if success:
         # Update to New Password
-        if db.update_supervisor_password(name, new_password):
+        if db.update_supervisor_password(email, new_password):
             flash("Password updated successfully. Please login.")
         else:
             flash("Error updating password. Please try again.")
     else:
-        flash("Invalid Name or Old Password.")
+        flash("Invalid Email or Old Password.")
         
     return redirect(url_for('login'))
 
@@ -482,21 +487,39 @@ def configure():
             
             # Check if 'Password' column exists, else default
             has_password = 'Password' in df_supervisors.columns
+            # Check for 'Email ids' column
+            # Note: user said "Email ids" in the command output earlier.
             
-            # Assuming Name is Col 0
+            # Normalize column names just in case
+            df_supervisors.columns = [c.strip() for c in df_supervisors.columns]
+            
+            # Assuming Name is 'Name' and Email is 'Email ids'
+            
+            col_name = 'Name' if 'Name' in df_supervisors.columns else df_supervisors.columns[2] # Fallback index 2 based on previous view
+            col_email = 'Email ids' if 'Email ids' in df_supervisors.columns else (df_supervisors.columns[4] if len(df_supervisors.columns) > 4 else None)
+            
+            if not col_email:
+                 flash("Could not find 'Email ids' column. Please ensure format is correct.", "danger")
+                 return redirect(url_for('admin_dashboard'))
+
             for index, row in df_supervisors.iterrows():
-                name = str(row.iloc[0]).strip()
+                name = str(row[col_name]).strip()
+                email = str(row[col_email]).strip()
+                
                 if not name or name.lower() == 'nan': 
                     continue
+                if not email or email.lower() == 'nan':
+                     continue
                 
                 password = '123456'
                 if has_password:
-                    val = row['Password']
+                    val = row.get('Password')
                     if pd.notna(val):
                         password = str(val)
                 
-                supervisors_db_data.append({'name': name, 'password': password})
-                supervisors_names_only.append(name)
+                supervisors_db_data.append({'name': name, 'email': email, 'password': password})
+                # Construct unique display string
+                supervisors_names_only.append(f"{name} ({email})")
             
             # Check if we got any valid supervisors
             if not supervisors_names_only:
@@ -896,27 +919,32 @@ def export_supervisor_pdf():
 @app.route('/supervisor')
 @login_required
 def supervisor_dashboard():
-    name = session.get('user_name')
+    # Use user_identifier (Name (Email)) for finding duties
+    user_identifier = session.get('user_identifier', session.get('user_name'))
+    user_name_simple = session.get('user_name') # Just name for display
     
-    # 1. Get List of Exams
-    available_exams = db.get_available_exams()
+    # 1. Fetch available exams that have schedules
+    available_exams = db.get_available_exams() # Returns [{'name':..., 'date':...}, ...]
     
-    # 2. Check if specific exam selected
+    # 2. Check if a specific exam is selected OR default to latest
     selected_exam = request.args.get('exam_name')
-    
+    if not selected_exam and available_exams:
+        selected_exam = available_exams[0]['name']
+        
     my_schedule = []
-    pending_issues = set()  # Store (date, time, block) tuples for sessions with pending issues
+    pending_issues = set()
     
     try:
         if selected_exam:
-            raw_sched = db.get_schedule_for_supervisor(selected_exam, name)
+            # Fetch my duties using Identifier
+            raw_sched = db.get_schedule_for_supervisor(selected_exam, user_identifier)
             aggregated = aggregate_schedule_rows(raw_sched)
             my_schedule = calculate_row_spans(aggregated)
             
-            # Get issues for this supervisor in this exam
+            # Get issues for this supervisor in this exam (using Identifier)
             issues = db.get_open_issues(selected_exam)
             for issue in issues:
-                if issue.get('supervisor_name') == name:
+                if issue.get('supervisor_name') == user_identifier:
                     pending_issues.add((issue.get('date'), issue.get('time'), issue.get('block')))
     except Exception as e:
         flash(f"Error loading schedule: {e}")
@@ -925,25 +953,26 @@ def supervisor_dashboard():
                            exams=available_exams, 
                            selected_exam=selected_exam, 
                            schedule=my_schedule, 
-                           name=name,
+                           name=user_name_simple,
                            pending_issues=pending_issues)
-
+                           
 @app.route('/report_issue', methods=['POST'])
 @login_required
-def report_issue():
+def report_issue_route():
     exam_name = request.form.get('exam_name')
     date = request.form.get('date')
     time = request.form.get('time')
     block = request.form.get('block')
     reason = request.form.get('reason')
-    supervisor_name = session.get('user_name')
     
-    if not all([exam_name, date, time, block, supervisor_name]):
-        flash("Missing information for reporting issue.")
-        return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
+    # Use identifier
+    supervisor_name = session.get('user_identifier', session.get('user_name'))
+    
+    if db.report_issue(exam_name, supervisor_name, date, time, block, reason):
+        flash("Issue reported successfully.")
+    else:
+        flash("Error reporting issue.")
         
-    success, msg = db.report_issue(exam_name, supervisor_name, date, time, block, reason)
-    flash(msg)
     return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
 
 if __name__ == '__main__':

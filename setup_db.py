@@ -27,22 +27,21 @@ try:
     print("Creating Tables if not exist...")
     
     # 1. Supervisors
+    # 1. Supervisors
+    # USER REQUEST: Delete all previous supervisors.
+    # We DROP the table to clear data and ensure clean schema change.
+    cursor.execute("DROP TABLE IF EXISTS supervisors CASCADE;")
+    
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS supervisors (
         id SERIAL PRIMARY KEY,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        name TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
         password TEXT
     );
     """)
-    # Migration for existing table
-    try:
-        cursor.execute("ALTER TABLE supervisors ADD COLUMN IF NOT EXISTS password TEXT;")
-        print("- Supervisors schema update (password col) check.")
-    except Exception as e:
-        print(f"  (Migration warning: {e})")
-        
-    print("- Supervisors table check.")
+    print("- Supervisors table recreated (Previous data deleted).")
 
     # 2. Blocks
     cursor.execute("""
