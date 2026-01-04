@@ -52,7 +52,7 @@ def upsert_supervisors(supervisors_list):
         INSERT INTO supervisors (name, email, password) 
         VALUES (%s, %s, %s) 
         ON CONFLICT (email) 
-        DO UPDATE SET password = EXCLUDED.password, name = EXCLUDED.name;
+        DO UPDATE SET name = EXCLUDED.name;
         """
         cur.executemany(query, args)
         conn.commit()

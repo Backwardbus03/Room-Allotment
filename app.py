@@ -240,7 +240,7 @@ def login():
                 flash("Invalid Admin Password")
         
         elif role == 'supervisor':
-            email = request.form.get('email').strip()
+            email = request.form.get('email').strip().lower()
             password = request.form.get('password')
             
             # Verify via DB
@@ -504,7 +504,7 @@ def configure():
 
             for index, row in df_supervisors.iterrows():
                 name = str(row[col_name]).strip()
-                email = str(row[col_email]).strip()
+                email = str(row[col_email]).strip().lower()
                 
                 if not name or name.lower() == 'nan': 
                     continue

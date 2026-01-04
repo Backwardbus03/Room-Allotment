@@ -80,18 +80,7 @@ def generate_schedule(rooms, supervisors, sessions_data):
         if remaining > 0:
             unallocated.append(f"{remaining} students for {sess.get('subject')} in {date_raw}")
             print(f"Warning: Could not allocate {remaining} students for {sess.get('subject')}")
-            
-    # DEBUG DISTRIBUTION
-    print("\n--- ROOM ALLOCATION DEBUG ---")
-    for key, rooms in slot_room_map.items():
-        print(f"Slot {key}:")
-        for r_name, data in rooms.items():
-            if data['used'] > 0:
-                print(f"  Room {r_name}: {data['used']} students ({len(data['sessions'])} subjects).")
-    print("---------------------------------\n")
 
-    
-    import math
 
     # 3. DEFINE TASKS (Pass 2)
     tasks = []
