@@ -67,6 +67,8 @@ try:
     """)
     print("- Schedules table check.")
 
+    cursor.execute("DROP TABLE IF EXISTS supervisor_issues CASCADE;")
+
     # 4. Supervisor Issues
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS supervisor_issues (
@@ -78,6 +80,12 @@ try:
         block TEXT NOT NULL,
         reason TEXT,
         status TEXT DEFAULT 'OPEN',
+        candidate_supervisor TEXT,
+        candidate_date TEXT,
+        candidate_time TEXT,
+        candidate_block TEXT,
+        swap_type TEXT DEFAULT '1-way (Relief)',
+        rejection_reason TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)

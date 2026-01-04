@@ -214,6 +214,25 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+@app.route('/api/get_swap_candidates', methods=['POST'])
+@login_required
+def get_swap_candidates_route():
+    data = request.json
+    exam_name = data.get('exam_name')
+    date = data.get('date')
+    time = data.get('time')
+    supervisor_name = session.get('user_identifier', session.get('user_name'))
+    
+    if not all([exam_name, date, time]):
+        return json.dumps({'error': 'Missing data'}), 400
+        
+    schedule_data = db.get_full_schedule(exam_name)
+    if not schedule_data:
+        return json.dumps({'error': 'Schedule not found'}), 404
+        
+    candidates = find_swap_candidates(schedule_data, date, time, supervisor_name)
+    return json.dumps(candidates)
+
 # --- Routes ---
 
 @app.route('/')
@@ -783,6 +802,25 @@ def export_pdf():
 def resolve_issue():
     issue_id = request.form.get('issue_id')
     exam_name = request.form.get('exam_name')
+    action = request.form.get('action') # 'accept' or 'reject'
+    rejection_reason = request.form.get('rejection_reason')
+
+    if not issue_id or not exam_name:
+         flash("Missing issue ID or exam name.")
+         return redirect(url_for('admin_dashboard', exam_name=exam_name))
+
+    if action == 'reject':
+        if not rejection_reason:
+            flash("Rejection reason is required.")
+            return redirect(url_for('admin_dashboard', exam_name=exam_name))
+            
+        if db.resolve_issue(issue_id, status='REJECTED', rejection_reason=rejection_reason):
+            flash("Issue rejected successfully.")
+        else:
+            flash("Error rejecting issue.")
+        return redirect(url_for('admin_dashboard', exam_name=exam_name))
+    
+    # If Accept, proceed with swap logic
     
     # Original (Target) details
     supervisor_A = request.form.get('target_supervisor')
@@ -799,7 +837,7 @@ def resolve_issue():
     date_B = request.form.get('candidate_date')
     time_B = request.form.get('candidate_time')
     
-    if not all([issue_id, exam_name, supervisor_A, date_A, time_A, supervisor_B]):
+    if not all([supervisor_A, date_A, time_A, supervisor_B]):
         flash("Missing information to resolve issue.")
         return redirect(url_for('admin_dashboard', exam_name=exam_name))
         
@@ -842,7 +880,7 @@ def resolve_issue():
             
     # Save
     if db.update_schedule(exam_name, schedule_data):
-        db.resolve_issue(issue_id)
+        db.resolve_issue(issue_id, status='RESOLVED')
         flash(f"Swap successful. {supervisor_A} and {supervisor_B} swapped.")
     else:
         flash("Error saving updated schedule.")
@@ -932,20 +970,35 @@ def supervisor_dashboard():
         selected_exam = available_exams[0]['name']
         
     my_schedule = []
-    pending_issues = set()
+    pending_issues = {} # Dict: Key -> Status String
     
     try:
         if selected_exam:
             # Fetch my duties using Identifier
+            # Note: get_schedule_for_supervisor might need simple name or identifier depending on how it was saved
+            # In login we set identifier = Name (Email). In configure we saved Name (Email).
+            # So passing identifier is correct.
             raw_sched = db.get_schedule_for_supervisor(selected_exam, user_identifier)
             aggregated = aggregate_schedule_rows(raw_sched)
             my_schedule = calculate_row_spans(aggregated)
             
-            # Get issues for this supervisor in this exam (using Identifier)
-            issues = db.get_open_issues(selected_exam)
-            for issue in issues:
-                if issue.get('supervisor_name') == user_identifier:
-                    pending_issues.add((issue.get('date'), issue.get('time'), issue.get('block')))
+            # Fetch my issues history
+            issues_history = db.get_supervisor_issues_history(selected_exam, user_identifier)
+            
+            for issue in issues_history:
+                # Key: (Date, Time, Block) - Normalize strings
+                i_date = issue['date'].strip() if issue['date'] else ''
+                i_time = issue['time'].strip() if issue['time'] else ''
+                i_block = issue['block'].strip() if issue['block'] else ''
+                
+                key = (i_date, i_time, i_block)
+                
+                if key not in pending_issues:
+                    if issue['status'] == 'OPEN':
+                        pending_issues[key] = 'PENDING'
+                    elif issue['status'] == 'REJECTED':
+                        pending_issues[key] = f"REJECTED: {issue.get('rejection_reason', 'No reason given')}"
+            
     except Exception as e:
         flash(f"Error loading schedule: {e}")
             
@@ -965,13 +1018,32 @@ def report_issue_route():
     block = request.form.get('block')
     reason = request.form.get('reason')
     
+    # Optional swap selection
+    candidate_supervisor = request.form.get('candidate_supervisor')
+    candidate_date = request.form.get('candidate_date')
+    candidate_time = request.form.get('candidate_time')
+    candidate_block = request.form.get('candidate_block')
+    swap_type = request.form.get('swap_type')
+    
+    candidate_data = None
+    if candidate_supervisor:
+        candidate_data = {
+            'candidate_supervisor': candidate_supervisor,
+            'candidate_date': candidate_date,
+            'candidate_time': candidate_time,
+            'candidate_block': candidate_block,
+            'swap_type': swap_type
+        }
+    
     # Use identifier
     supervisor_name = session.get('user_identifier', session.get('user_name'))
     
-    if db.report_issue(exam_name, supervisor_name, date, time, block, reason):
+    success, msg = db.report_issue(exam_name, supervisor_name, date, time, block, reason, candidate_data)
+    
+    if success:
         flash("Issue reported successfully.")
     else:
-        flash("Error reporting issue.")
+        flash(f"Error reporting issue: {msg}")
         
     return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
 

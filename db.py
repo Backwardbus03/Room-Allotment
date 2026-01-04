@@ -295,18 +295,39 @@ def get_full_schedule(exam_name):
     finally:
         conn.close()
 
-def report_issue(exam_name, supervisor_name, date, time, block, reason):
-    """Reports a supervisor unavailability issue."""
+def report_issue(exam_name, supervisor_name, date, time, block, reason, candidate_data=None):
+    """
+    Reports a supervisor unavailability issue.
+    candidate_data: dict with candidate_supervisor, candidate_date, candidate_time, candidate_block, swap_type
+    """
     conn = get_connection()
     if not conn: return False, "DB Connection Failed"
     
     try:
         cur = conn.cursor()
+        
+        # Prepare optional fields
+        c_sup = None
+        c_date = None
+        c_time = None
+        c_block = None
+        s_type = '1-way (Relief)'
+        
+        if candidate_data:
+            c_sup = candidate_data.get('candidate_supervisor')
+            c_date = candidate_data.get('candidate_date')
+            c_time = candidate_data.get('candidate_time')
+            c_block = candidate_data.get('candidate_block')
+            s_type = candidate_data.get('swap_type', '1-way (Relief)')
+            
         query = """
-        INSERT INTO supervisor_issues (exam_name, supervisor_name, date, time, block, reason)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO supervisor_issues 
+        (exam_name, supervisor_name, date, time, block, reason, 
+         candidate_supervisor, candidate_date, candidate_time, candidate_block, swap_type)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        cur.execute(query, (exam_name, supervisor_name, date, time, block, reason))
+        cur.execute(query, (exam_name, supervisor_name, date, time, block, reason,
+                            c_sup, c_date, c_time, c_block, s_type))
         conn.commit()
         cur.close()
         return True, "Issue reported successfully."
@@ -338,14 +359,40 @@ def get_open_issues(exam_name):
     finally:
         conn.close()
 
-def resolve_issue(issue_id):
-    """Marks an issue as resolved."""
+def get_supervisor_issues_history(exam_name, supervisor_name):
+    """Fetches all issues reported by a supervisor for a specific exam."""
+    conn = get_connection()
+    if not conn: return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        query = """
+        SELECT * FROM supervisor_issues 
+        WHERE exam_name = %s AND supervisor_name = %s
+        ORDER BY created_at DESC
+        """
+        cur.execute(query, (exam_name, supervisor_name))
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"Error fetching supervisor history: {e}")
+        return []
+    finally:
+        conn.close()
+
+def resolve_issue(issue_id, status='RESOLVED', rejection_reason=None):
+    """Marks an issue as resolved or rejected."""
     conn = get_connection()
     if not conn: return False
     
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE supervisor_issues SET status = 'RESOLVED' WHERE id = %s", (issue_id,))
+        if status == 'REJECTED':
+             cur.execute("UPDATE supervisor_issues SET status = %s, rejection_reason = %s WHERE id = %s", (status, rejection_reason, issue_id))
+        else:
+             cur.execute("UPDATE supervisor_issues SET status = %s WHERE id = %s", (status, issue_id))
+        
         conn.commit()
         cur.close()
         return True

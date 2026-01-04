@@ -216,12 +216,31 @@
                         <div class="col-md-3">
                             <div class="small text-muted">Reason</div>
                             <div class="text-dark fst-italic">"{{ issue.reason }}"</div>
+                            {% if issue.candidate_supervisor %}
+                            <div class="mt-2 p-2 bg-light border rounded small">
+                                <strong>Requested Swap:</strong> <br>
+                                <span class="text-success">{{ issue.candidate_supervisor }}</span>
+                                {% if issue.swap_type == '2-way' %}
+                                (2-Way) <br>
+                                <span class="text-muted">Slot: {{ issue.candidate_date }} | {{ issue.candidate_time
+                                    }}</span>
+                                {% else %}
+                                (Relief)
+                                {% endif %}
+                            </div>
+                            {% endif %}
                         </div>
                         <div class="col-md-2 text-end">
-                            <button class="btn btn-primary btn-sm" data-bs-toggle="modal"
-                                data-bs-target="#resolveModal{{ issue.id }}">
-                                Resolve Issue
-                            </button>
+                            <div class="d-grid gap-2">
+                                <button class="btn btn-primary btn-sm" data-bs-toggle="modal"
+                                    data-bs-target="#resolveModal{{ issue.id }}">
+                                    Review & Accept
+                                </button>
+                                <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal"
+                                    data-bs-target="#rejectModal{{ issue.id }}">
+                                    Reject
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -236,7 +255,43 @@
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
                         <div class="modal-body">
-                            <h6 class="text-muted mb-3">Suggested Swaps (Supervisors free at {{ issue.time }})</h6>
+
+                            <!-- If Supervisor Requested a Specific Swap -->
+                            {% if issue.candidate_supervisor %}
+                            <div class="alert alert-success border-success mb-3">
+                                <h6 class="alert-heading"><i class="bi bi-check-circle-fill me-2"></i>Supervisor
+                                    Requested Swap</h6>
+                                <hr>
+                                <p class="mb-0">
+                                    <strong>Candidate:</strong> {{ issue.candidate_supervisor }} <br>
+                                    <strong>Type:</strong> {{ issue.swap_type }} <br>
+                                    {% if issue.candidate_date %}
+                                    <strong>Their Slot:</strong> {{ issue.candidate_date }} | {{ issue.candidate_time }}
+                                    ({{ issue.candidate_block }})
+                                    {% endif %}
+                                </p>
+                                <form action="{{ url_for('resolve_issue') }}" method="POST" class="mt-3">
+                                    <input type="hidden" name="issue_id" value="{{ issue.id }}">
+                                    <input type="hidden" name="exam_name" value="{{ issue.exam_name }}">
+                                    <input type="hidden" name="action" value="accept">
+
+                                    <input type="hidden" name="target_supervisor" value="{{ issue.supervisor_name }}">
+                                    <input type="hidden" name="target_date" value="{{ issue.date }}">
+                                    <input type="hidden" name="target_time" value="{{ issue.time }}">
+
+                                    <input type="hidden" name="candidate_supervisor"
+                                        value="{{ issue.candidate_supervisor }}">
+                                    <input type="hidden" name="swap_type" value="{{ issue.swap_type }}">
+                                    <input type="hidden" name="candidate_date" value="{{ issue.candidate_date }}">
+                                    <input type="hidden" name="candidate_time" value="{{ issue.candidate_time }}">
+
+                                    <button type="submit" class="btn btn-success w-100">Accept Requested Swap</button>
+                                </form>
+                            </div>
+                            <hr>
+                            {% endif %}
+
+                            <h6 class="text-muted mb-3">Other Available Suggestions</h6>
 
                             {% if issue.suggestions %}
                             <div class="table-responsive">
@@ -276,6 +331,7 @@
                                                 <form action="{{ url_for('resolve_issue') }}" method="POST">
                                                     <input type="hidden" name="issue_id" value="{{ issue.id }}">
                                                     <input type="hidden" name="exam_name" value="{{ issue.exam_name }}">
+                                                    <input type="hidden" name="action" value="accept">
 
                                                     <input type="hidden" name="target_supervisor"
                                                         value="{{ issue.supervisor_name }}">
@@ -304,10 +360,44 @@
                                 </table>
                             </div>
                             {% else %}
-                            <p class="text-muted text-center py-3">No suitable swap candidates found.</p>
+                            <p class="text-muted text-center py-3">No other suitable swap candidates found.</p>
                             {% endif %}
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Reject Modal -->
+            <div class="modal fade" id="rejectModal{{ issue.id }}" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog">
+                    <form action="{{ url_for('resolve_issue') }}" method="POST">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title text-danger">Reject Request</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                    aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Are you sure you want to reject this request from <strong>{{ issue.supervisor_name
+                                        }}</strong>?</p>
+
+                                <input type="hidden" name="issue_id" value="{{ issue.id }}">
+                                <input type="hidden" name="exam_name" value="{{ issue.exam_name }}">
+                                <input type="hidden" name="action" value="reject">
+
+                                <div class="mb-3">
+                                    <label for="rejection_reason" class="form-label">Rejection Reason <span
+                                            class="text-danger">*</span></label>
+                                    <textarea class="form-control" name="rejection_reason" rows="3" required
+                                        placeholder="Reason for rejection..."></textarea>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-danger">Reject Request</button>
+                            </div>
+                        </div>
+                    </form>
                 </div>
             </div>
             {% endfor %}
