@@ -30,11 +30,7 @@
         </a>
         <div class="d-flex justify-content-between align-items-center">
             <h2 class="h3 mb-0 text-gray-800">Exam Schedule Generated</h2>
-            <div>
-                <a href="/api/export-pdf?exam_name={{ exam_name }}" class="btn btn-primary" target="_blank">
-                    <i class="bi bi-file-earmark-pdf me-2"></i>Export PDF
-                </a>
-            </div>
+            <!-- Generalized export moved to specific tabs -->
         </div>
     </div>
 
@@ -64,8 +60,12 @@
         <div class="tab-pane fade show active" id="schedule" role="tabpanel" aria-labelledby="schedule-tab">
             <!-- Main Allocations Card -->
             <div class="card shadow-sm border-0 mb-4">
-                <div class="card-header bg-white py-3 border-bottom">
+                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
                     <h5 class="m-0 font-weight-bold text-primary">Block Allocations</h5>
+                    <a href="/api/export-pdf?exam_name={{ exam_name }}&type=timetable" class="btn btn-sm btn-primary"
+                        target="_blank">
+                        <i class="bi bi-table me-1"></i> Export Timetable
+                    </a>
                 </div>
                 <div class="card-body p-0">
                     {% if main_allocations %}
@@ -165,9 +165,17 @@
 
         <!-- Workload Tab -->
         <div class="tab-pane fade" id="workload" role="tabpanel" aria-labelledby="workload-tab">
-            <div class="mb-3">
-                <h5 class="mb-0 text-secondary">Duty Count Report</h5>
-                <p class="text-muted small mb-0">Supervisor workload distribution</p>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h5 class="mb-0 text-secondary">Duty Count Report</h5>
+                    <p class="text-muted small mb-0">Supervisor workload distribution</p>
+                </div>
+                <div>
+                    <a href="/api/export-pdf?exam_name={{ exam_name }}&type=workload" class="btn btn-sm btn-primary"
+                        target="_blank">
+                        <i class="bi bi-file-bar-graph me-1"></i> Export Workload Report
+                    </a>
+                </div>
             </div>
 
             <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 row-cols-xl-4 g-3">
@@ -384,6 +392,7 @@
                                 <input type="hidden" name="issue_id" value="{{ issue.id }}">
                                 <input type="hidden" name="exam_name" value="{{ issue.exam_name }}">
                                 <input type="hidden" name="action" value="reject">
+                                <input type="hidden" name="target_supervisor" value="{{ issue.supervisor_name }}">
 
                                 <div class="mb-3">
                                     <label for="rejection_reason" class="form-label">Rejection Reason <span

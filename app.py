@@ -4,6 +4,9 @@ import scheduler
 import json
 import os
 from functools import wraps
+from functools import wraps
+from dotenv import load_dotenv
+load_dotenv()
 from config import Config
 import db
 import extract_pdf
@@ -13,6 +16,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 from flask import send_file
+import mailer
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -746,6 +750,73 @@ def generate():
                 'sessions_data': sessions_data
             }
             db.save_schedule(exam_name, input_snapshot, schedule_data)
+            
+            # --- SEND EMAILS ---
+            try:
+                flash("Schedule saved. Sending notification emails...", "info")
+                print("--- STARTING EMAIL NOTIFICATIONS ---")
+                
+                # 0. Generate Master PDF for Admin
+                try:
+                    admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+                    print(f"Generated Admin PDF: {len(admin_pdf_bytes)} bytes")
+                    admin_email = app.config.get('MAIL_ADMIN')
+                    if admin_email:
+                        print(f"Sending Admin Notification to {admin_email}")
+                        mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, "Generated")
+                    else:
+                        print("MAIL_ADMIN not set, skipping Admin email.")
+                except Exception as e_admin:
+                    print(f"ERROR Sending Admin Email: {e_admin}")
+                
+                # 1. Group by Supervisor
+                supervisor_schedules = {}
+                for row in schedule_data:
+                    sup_name = row.get('Supervisor')
+                    if sup_name and sup_name != 'NA' and sup_name != 'NOBODY AVAILABLE':
+                        if sup_name not in supervisor_schedules:
+                            supervisor_schedules[sup_name] = []
+                        supervisor_schedules[sup_name].append(row)
+                
+                print(f"Found {len(supervisor_schedules)} supervisors to notify.")
+                        
+                # 2. Get Supervisors to find Emails
+                sup_lookup = {s['name']: s['email'] for s in supervisors_data}
+                
+                # 3. Send Emails
+                count_sent = 0
+                for sup_name, rows in supervisor_schedules.items():
+                    # Extract email logic...
+                    email = None
+                    if "(" in sup_name and sup_name.endswith(")"):
+                        parts = sup_name.rsplit('(', 1)
+                        if len(parts) > 1:
+                            email = parts[1].rstrip(')').strip()
+                    if not email:
+                         email = sup_lookup.get(sup_name)
+                         
+                    if email:
+                        try:
+                            # Generate PERSONAL PDF
+                            sup_pdf_bytes = _generate_supervisor_pdf_bytes(exam_name, sup_name, rows)
+                            print(f"Sending Superviser Email to {sup_name} ({email}) - PDF: {len(sup_pdf_bytes)} bytes")
+                            mailer.send_schedule_notification(email, sup_name, exam_name, rows, pdf_bytes=sup_pdf_bytes)
+                            count_sent += 1
+                        except Exception as e_sup:
+                             print(f"ERROR Sending Email to {sup_name}: {e_sup}")
+                    else:
+                        print(f"Skipping {sup_name} - No Email Found")
+                
+                if count_sent > 0:
+                     flash(f"Emails triggered for {count_sent} supervisors + Admin.", "success")
+                else:
+                     flash("No supervisor emails sent (Emails not found). Admin email sent if configured.", "warning")
+                
+                print(f"--- EMAIL NOTIFICATIONS DONE. Sent: {count_sent} ---")
+                     
+            except Exception as e:
+                print(f"--- CRITICAL EMAIL ERROR: {e} ---")
+                flash(f"Error sending emails: {str(e)}", "danger")
         
         # Separate Main Allocations vs Backups/Relievers
         main_allocations = []
@@ -804,11 +875,116 @@ def generate():
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
 
+# --- PDF Helpers ---
+
+def _generate_timetable_pdf_bytes(exam_name, schedule_data):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    styles = getSampleStyleSheet()
+    
+    # Title
+    title_style = styles['Title']
+    title_style.fontSize = 16
+    title_style.textColor = colors.HexColor("#1e3a8a")
+    elements = [Paragraph(f"MASTER TIMETABLE - {exam_name}", title_style)]
+    
+    # Data Processing
+    aggregated_rows = aggregate_schedule_rows(schedule_data)
+    
+    data = [["Date", "Time", "Block", "Supervisor", "Role", "Subject"]]
+    
+    cell_style = styles['BodyText']
+    cell_style.fontSize = 9
+    cell_style.leading = 11
+    
+    for row in aggregated_rows:
+        subj_para = Paragraph(row.get('Subject', ''), cell_style)
+        sup_para = Paragraph(row.get('Supervisor', ''), cell_style)
+        
+        data.append([
+            row.get('Date', ''),
+            row.get('Time', ''),
+            row.get('Block', ''),
+            sup_para,
+            row.get('Role', '').replace(' SUPERVISOR', ''),
+            subj_para
+        ])
+    
+    # Table Styling
+    # Widths: Date(90), Time(90), Block(70), Supervisor(190), Role(80), Subject(250)
+    table = Table(data, colWidths=[90, 90, 70, 190, 80, 250], repeatRows=1)
+    
+    style = TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e40af")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('ALIGN', (3,1), (3,-1), 'LEFT'),
+        ('ALIGN', (5,1), (5,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f3f4f6")])
+    ])
+    
+    table.setStyle(style)
+    elements.append(table)
+    
+    doc.build(elements)
+    return buffer.getvalue()
+
+def _generate_supervisor_pdf_bytes(exam_name, supervisor_name, my_duties):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    
+    elements = []
+    elements.append(Paragraph(f"DUTY SCHEDULE - {supervisor_name}", styles['Title']))
+    elements.append(Paragraph(f"Exam: {exam_name}", styles['Heading2']))
+    elements.append(Paragraph("<br/>", styles['Normal']))
+    
+    data = [["Date", "Time", "Block", "Role", "Subject"]]
+    cell_style = styles['BodyText']
+    cell_style.fontSize = 10
+    
+    for row in my_duties:
+        subj_para = Paragraph(row.get('Subject', '-'), cell_style)
+        data.append([
+            row.get('Date', row.get('Day', '')),
+            row.get('Time', row.get('Session', '')),
+            row.get('Block', ''),
+            row.get('Role', '').replace(' SUPERVISOR', ''),
+            subj_para
+        ])
+        
+    table = Table(data, colWidths=[80, 80, 60, 80, 150])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4f46e5")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (4,1), (4,-1), 'LEFT'),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f9fafb")])
+    ]))
+    
+    elements.append(table)
+    doc.build(elements)
+    return buffer.getvalue()
+
 @app.route('/api/export-pdf', methods=['GET'])
 @admin_required
 def export_pdf():
     # Fetch data
     selected_exam = request.args.get('exam_name')
+    export_type = request.args.get('type', 'timetable') # 'timetable' or 'workload'
+    
     if not selected_exam:
         return "Error: Exam Name required.", 400
         
@@ -816,60 +992,57 @@ def export_pdf():
     if not results:
         return "Error: No data found for this exam.", 400
 
-    # Aggregate rows to match dashboard view (combines subjects/counts)
-    results = aggregate_schedule_rows(results)
-
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    title_text = f"VIT EXAM CELL - GLOBAL MASTER DUTY LIST - {selected_exam}"
-    elements.append(Paragraph(title_text, styles['Title']))
-    
-    # Headers
-    # Removed Count as requested
-    data = [["Date", "Slot", "Room", "Supervisor", "Role", "Subject"]]
-    
-    # Create a custom style for the table cells to handle wrapping
-    cell_style = styles['BodyText']
-    cell_style.fontSize = 9
-    cell_style.leading = 11
-
-    for row in results:
-        # Wrap Subject in Paragraph for auto-newline
-        subj_text = row.get('Subject', '')
-        subj_para = Paragraph(subj_text, cell_style)
+    if export_type == 'workload':
+        # --- WORKLOAD REPORT ---
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
         
-        data.append([
-            row.get('Date', ''),
-            row.get('Time', ''),
-            row.get('Block', ''),
-            Paragraph(row.get('Supervisor', ''), cell_style), # Wrap supervisor too just in case
-            row.get('Role', '').replace(' SUPERVISOR', ''),
-            subj_para
-        ])
+        elements = []
+        title_text = f"SUPERVISOR WORKLOAD REPORT - {selected_exam}"
+        elements.append(Paragraph(title_text, styles['Title']))
+        
+        # 1. Calculate Counts
+        duty_counts = {}
+        seen_assignments = set()
+        for row in results:
+            sup = row.get('Supervisor', 'Unknown')
+            if sup != 'NA' and sup != 'NOBODY AVAILABLE' and sup:
+                key = (sup, row.get('Date'), row.get('Time'), row.get('Block'))
+                if key not in seen_assignments:
+                    duty_counts[sup] = duty_counts.get(sup, 0) + 1
+                    seen_assignments.add(key)
+        
+        sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # 2. Build Table Data
+        data = [["Supervisor Name", "Total Duties"]]
+        for name, count in sorted_duties:
+            data.append([name, str(count)])
+            
+        table = Table(data, colWidths=[350, 100])
+        table.setStyle(TableStyle([
+             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
+             ('ALIGN', (0,1), (0,-1), 'LEFT'),
+             ('LEFTPADDING', (0,1), (0,-1), 15),
+             ('ALIGN', (1,1), (1,-1), 'CENTER'),
+             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e40af")),
+             ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+             ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f3f4f6")])
+        ]))
+        
+        elements.append(table)
+        doc.build(elements)
+        buffer.seek(0)
+        filename = f"{selected_exam.replace(' ', '_')}_Workload_Report.pdf"
+        
+    else:
+        # --- DETAILED TIMETABLE (Use Helper) ---
+        pdf_bytes = _generate_timetable_pdf_bytes(selected_exam, results)
+        buffer = io.BytesIO(pdf_bytes)
+        filename = f"{selected_exam.replace(' ', '_')}_Timetable.pdf"
 
-    # Adjusted widths to fill A4 Landscape (~800pt usable)
-    # Total: 90+90+60+150+80+300 = 770
-    table = Table(data, colWidths=[90, 90, 60, 150, 80, 300])
-    
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#002d62")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('FONTSIZE', (0,0), (-1,-1), 9),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (3,1), (3,-1), 'LEFT'), 
-        ('ALIGN', (5,1), (5,-1), 'LEFT'),
-    ]))
-    
-    elements.append(table)
-    doc.build(elements)
-    buffer.seek(0)
-    
-    filename = f"{selected_exam.replace(' ', '_')}_Duty_List.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
 @app.route('/resolve_issue', methods=['POST'])
@@ -890,6 +1063,35 @@ def resolve_issue():
             return redirect(url_for('admin_dashboard', exam_name=exam_name))
             
         if db.resolve_issue(issue_id, status='REJECTED', rejection_reason=rejection_reason):
+            try:
+                # 1. Identify Supervisor
+                target_sup = request.form.get('target_supervisor')
+                
+                if target_sup:
+                    # 2. Get Email (Extract from "Name (Email)" or Lookup)
+                    email = None
+                    if "(" in target_sup and target_sup.endswith(")"):
+                         parts = target_sup.rsplit('(', 1)
+                         if len(parts) > 1:
+                             email = parts[1].rstrip(')').strip()
+                    
+                    if not email:
+                        # Fallback
+                        all_sups = db.get_all_supervisors()
+                        sup_lookup = {s['name']: s['email'] for s in all_sups}
+                        email = sup_lookup.get(target_sup)
+                    
+                    if email:
+                        mailer.send_swap_rejection(email, target_sup, exam_name, rejection_reason)
+                        flash(f"Rejection email sent to {target_sup}.", "info")
+                    else:
+                         flash(f"Could not find email for {target_sup} to satisfy notification.", "warning")
+                else:
+                    flash("Supervisor name missing, could not send email.", "warning")
+                    
+            except Exception as e_mail:
+                flash(f"Error sending rejection email: {e_mail}", "warning")
+                
             flash("Issue rejected successfully.")
         else:
             flash("Error rejecting issue.")
@@ -956,6 +1158,48 @@ def resolve_issue():
     # Save
     if db.update_schedule(exam_name, schedule_data):
         db.resolve_issue(issue_id, status='RESOLVED')
+        
+        # --- EMAIL NOTIFICATION (ACCEPT) ---
+        try:
+            flash("Swap successful. Sending emails...", "info")
+            # 1. Get Emails
+            all_sups = db.get_all_supervisors()
+            sup_lookup = {s['name']: s['email'] for s in all_sups}
+            
+            def get_email_safe(identifier, lookup):
+                if not identifier: return None
+                if "(" in identifier and identifier.endswith(")"):
+                    parts = identifier.rsplit('(', 1)
+                    if len(parts) > 1:
+                        return parts[1].rstrip(')').strip()
+                return lookup.get(identifier)
+
+            email_A = get_email_safe(supervisor_A, sup_lookup)
+            email_B = get_email_safe(supervisor_B, sup_lookup)
+            
+            if email_A and email_B:
+                 # 2. Get New Schedules (Filter from the `schedule_data` we just updated!)
+                 # No need to refetch from DB.
+                 sched_A = [r for r in schedule_data if r['Supervisor'] == supervisor_A]
+                 sched_B = [r for r in schedule_data if r['Supervisor'] == supervisor_B]
+                 
+                 # 3. Send
+                 mailer.send_swap_acceptance(email_A, supervisor_A, email_B, supervisor_B, exam_name, sched_A, sched_B)
+                 flash("Emails sent to both supervisors.", "success")
+            else:
+                 flash("Could not find emails for one or both supervisors.", "warning")
+            
+            # Notify Admin with Updated Master Schedule
+            admin_email = app.config.get('MAIL_ADMIN')
+            if admin_email:
+                # Need to use the schedule_data (which is now updated in memory? yes line 1084 calls db.update_schedule(..., schedule_data))
+                # So schedule_data variable holds the NEW state.
+                admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+                mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, "Updated")
+                 
+        except Exception as e_mail:
+            flash(f"Error sending acceptance emails: {e_mail}", "warning")
+
         flash(f"Swap successful. {supervisor_A} and {supervisor_B} swapped.")
     else:
         flash("Error saving updated schedule.")
@@ -977,55 +1221,40 @@ def export_supervisor_pdf():
     if not my_schedule:
         return "Error: No duties found for this exam.", 400
 
-    buffer = io.BytesIO()
-    # Portrait might be better for single person, but keeping Landscape for consistency if needed. 
-    # Let's use Portrait for personal schedule
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    elements.append(Paragraph(f"DUTY SCHEDULE - {name.upper()}", styles['Title']))
-    elements.append(Paragraph(f"Exam: {selected_exam}", styles['Heading2']))
-    
-    # Headers
-    data = [["Date", "Time", "Block", "Role", "Subject"]]
-    
-    cell_style = styles['BodyText']
-    cell_style.fontSize = 10
-    
-    for row in my_schedule:
-        subj_para = Paragraph(row.get('Subject', '-'), cell_style)
-        
-        data.append([
-            row.get('Date', row.get('Day', '')),
-            row.get('Time', row.get('Session', '')),
-            row.get('Block', ''),
-            row.get('Role', '').replace(' SUPERVISOR', ''),
-            subj_para
-        ])
-
-    # A4 Portrait Width ~ 595pt - margins -> ~450pt usable?
-    # ReportLab default margins are ~72pt each side? 
-    # Let's assume ~450pt safe width. 
-    # [80, 80, 60, 80, 150] = 450
-    table = Table(data, colWidths=[80, 80, 60, 80, 150])
-    
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4f46e5")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('FONTSIZE', (0,0), (-1,-1), 10),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (4,1), (4,-1), 'LEFT'),
-    ]))
-    
-    elements.append(table)
-    doc.build(elements)
-    buffer.seek(0)
+    pdf_bytes = _generate_supervisor_pdf_bytes(selected_exam, name, my_schedule)
+    buffer = io.BytesIO(pdf_bytes)
     
     filename = f"{name.replace(' ', '_')}_{selected_exam.replace(' ', '_')}_Schedule.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+@app.route('/api/test-email', methods=['GET', 'POST'])
+@admin_required
+def test_email_route():
+    recipient = request.args.get('email') or app.config['MAIL_DEFAULT_SENDER']
+    if not recipient:
+        return "No recipient email configured. Check MAIL_DEFAULT_SENDER or pass ?email=..."
+    
+    # Debug Info
+    username = app.config.get('MAIL_USERNAME', 'Not Set')
+    password = app.config.get('MAIL_PASSWORD', 'Not Set')
+    server = app.config.get('MAIL_SERVER', 'Not Set')
+    
+    masked_pw = f"{password[:2]}...{password[-2:]} (Len: {len(password)})" if password and len(str(password)) > 4 else "Too Short/None"
+    debug_info = f"""
+    <div style="background:#f0f0f0; padding:10px; margin-bottom:10px; border:1px solid #ccc;">
+        <strong>Loaded Config:</strong><br>
+        Server: {server}<br>
+        Username: {username}<br>
+        Password: {masked_pw}<br>
+    </div>
+    """
+    
+    success, msg = mailer.test_email_connection(app, recipient)
+    
+    if success:
+        return f"{debug_info}<h3 style='color:green'>Success</h3><p>{msg}</p><p>Check inbox for {recipient}</p>"
+    else:
+        return f"{debug_info}<h3 style='color:red'>Failed</h3><p>Error: {msg}</p><p>Check your .env file for spaces or quotes around values.</p>"
 
 # --- Supervisor Routes ---
 
@@ -1116,6 +1345,12 @@ def report_issue_route():
     success, msg = db.report_issue(exam_name, supervisor_name, date, time, block, reason, candidate_data)
     
     if success:
+        try:
+            admin_email = app.config.get('MAIL_ADMIN')
+            if admin_email:
+                mailer.send_issue_reported_notification(admin_email, exam_name, supervisor_name, reason)
+        except:
+            pass
         flash("Issue reported successfully.")
     else:
         flash(f"Error reporting issue: {msg}")
