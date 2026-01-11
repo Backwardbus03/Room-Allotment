@@ -17,7 +17,34 @@ def generate_schedule(rooms, supervisors, sessions_data):
     """
     
     # 1. PREP DATA
-    all_supervisors = [s.strip() for s in supervisors if s.strip()]
+    # supervisors is now a list of dicts: {'name', 'email', 'role', 'unavailable_start', 'unavailable_end'}
+    
+    all_supervisors = []
+    sup_constraints = {}
+    
+    for s in supervisors:
+        if isinstance(s, dict):
+            # Check Role
+            if s.get('role') == 'HOD':
+                continue # HODs are exempt
+                
+            # Create identifier
+            name = s.get('name', 'Unknown')
+            email = s.get('email', '')
+            identifier = f"{name} ({email})"
+            
+            all_supervisors.append(identifier)
+            
+            # Store constraints
+            sup_constraints[identifier] = {
+                'start': s.get('unavailable_start'), # YYYY-MM-DD string
+                'end': s.get('unavailable_end')
+            }
+        else:
+            # Fallback for strings (legacy)
+            if s.strip():
+                all_supervisors.append(s.strip())
+
     if not all_supervisors:
         return {"schedule": [], "duties": {}}
 
@@ -198,19 +225,46 @@ def generate_schedule(rooms, supervisors, sessions_data):
         chosen_sup = "NOBODY AVAILABLE"
         
         if eligible:
-            # Fairness
-            strict = [c for c in eligible if duty_count[c] < max_allowed[c]]
-            pool = strict if strict else eligible
+            # Filter by Date Constraints
+            # slot_key is (Date, Time). Date might be "YYYY-MM-DD" or "Day 1".
+            # Our constraints are YYYY-MM-DD.
+            # If slot date is not a date string matchable, we skip check (or fail safe).
             
-            # Load Balancing
-            pool.sort(key=lambda x: duty_count[x])
-            min_load = duty_count[pool[0]]
-            best = [x for x in pool if duty_count[x] == min_load]
-            chosen_sup = random.choice(best)
+            slot_date_str = slot[0] # e.g. "2025-01-20" or "Day 1"
             
-            # Commit
-            duty_count[chosen_sup] += 1
-            slot_assignments[slot].add(chosen_sup)
+            date_filtered_eligible = []
+            for c in eligible:
+                constraints = sup_constraints.get(c)
+                is_unavailable = False
+                
+                if constraints and constraints.get('start') and constraints.get('end'):
+                    start = constraints['start']
+                    end = constraints['end']
+                    
+                    # Simple string comparison if format matches YYYY-MM-DD
+                    # Be careful if formats differ. We assume ISO format from HTML date input.
+                    if start <= slot_date_str <= end:
+                         is_unavailable = True
+                
+                if not is_unavailable:
+                    date_filtered_eligible.append(c)
+            
+            eligible = date_filtered_eligible
+            
+            if eligible:
+                # Fairness
+                strict = [c for c in eligible if duty_count[c] < max_allowed[c]]
+                pool = strict if strict else eligible
+                
+                # Load Balancing
+                pool.sort(key=lambda x: duty_count[x])
+                min_load = duty_count[pool[0]]
+                best = [x for x in pool if duty_count[x] == min_load]
+                chosen_sup = random.choice(best)
+                
+                # Commit
+                duty_count[chosen_sup] += 1
+                slot_assignments[slot].add(chosen_sup)
             
         # EXPAND TO OUTPUT ROWS
         # One row per subject in this room

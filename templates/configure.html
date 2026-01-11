@@ -132,6 +132,7 @@
 <script>
     const allSupervisors = {{ supervisors_json | safe }};
     const preloadedSessions = {{ preloaded_sessions | safe }};
+    const supervisorConstraints = {{ supervisor_constraints | safe }} || {};
 
     let sessionCounter = 0;
     let rowCount = 0;
@@ -175,8 +176,30 @@
         div.appendChild(createHidden(`department_${currentId}`, department));
         div.appendChild(createHidden(`total_students_${currentId}`, students));
 
-        // Get unavailable supervisors for this time slot
-        const unavailable = timeSlotUnavailability[timeSlotKey] || [];
+        // Check global constraints for this date
+        const autoUnavailable = [];
+        if (date && supervisorConstraints) {
+            for (const [name, range] of Object.entries(supervisorConstraints)) {
+                if (date >= range.start && date <= range.end) {
+                    autoUnavailable.push(name);
+                }
+            }
+        }
+
+        // Get unavailable supervisors for this time slot (or init with auto)
+        // If this is a new slot (not in timeSlotUnavailability), use autoUnavailable
+        let unavailable = timeSlotUnavailability[timeSlotKey];
+
+        if (!unavailable) {
+            unavailable = autoUnavailable;
+            timeSlotUnavailability[timeSlotKey] = unavailable;
+        } else {
+            // If exists, ensure auto-unavailable are still there (optional, but good for consistency)
+            // But usually we just take what's there. 
+            // If we want to enforcing "always unavailable", we might union them.
+            // For now, let's respect the slot if it exists, assuming it was initialized correctly or user modified.
+        }
+
         unavailable.forEach(name => {
             div.appendChild(createHidden(`unavailable_${currentId}`, name));
         });

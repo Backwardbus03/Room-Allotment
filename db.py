@@ -140,17 +140,43 @@ def update_supervisor_password(name, new_password):
     finally:
         conn.close()
 
+def update_supervisor_details(updates):
+    """
+    Updates role and unavailability for multiple supervisors.
+    updates: list of {'email': ..., 'role': ..., 'start': ..., 'end': ...}
+    """
+    conn = get_connection()
+    if not conn: return False
+
+    try:
+        cur = conn.cursor()
+        query = """
+        UPDATE supervisors 
+        SET role = %s, unavailable_start = %s, unavailable_end = %s 
+        WHERE email = %s
+        """
+        args = [(u['role'], u['start'], u['end'], u['email']) for u in updates]
+        cur.executemany(query, args)
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"Error updating supervisor details: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_supervisors():
-    """Returns a list of supervisor strings 'Name (Email)'."""
+    """Returns a list of supervisor dictionaries with all details."""
     conn = get_connection()
     if not conn: return []
 
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT name, email FROM supervisors")
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT name, email, role, unavailable_start, unavailable_end FROM supervisors ORDER BY name")
         rows = cur.fetchall()
         cur.close()
-        return [f"{row[0]} ({row[1]})" for row in rows]
+        return rows # Returns list of dicts
     except Exception as e:
         print(f"Error fetching supervisors: {e}")
         return []
@@ -399,6 +425,23 @@ def resolve_issue(issue_id, status='RESOLVED', rejection_reason=None):
     except Exception as e:
         print(f"Error resolving issue: {e}")
         return False
+    finally:
+        conn.close()
+
+def get_all_blocks():
+    """Returns a list of block dicts {'name': ..., 'capacity': ...}."""
+    conn = get_connection()
+    if not conn: return []
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT name, capacity FROM blocks ORDER BY name")
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"Error fetching blocks: {e}")
+        return []
     finally:
         conn.close()
 

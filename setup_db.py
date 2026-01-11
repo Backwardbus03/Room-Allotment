@@ -38,7 +38,10 @@ try:
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
-        password TEXT
+        password TEXT,
+        role TEXT DEFAULT 'Teacher',
+        unavailable_start TEXT,
+        unavailable_end TEXT
     );
     """)
     print("- Supervisors table recreated (Previous data deleted).")

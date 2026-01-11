@@ -501,20 +501,16 @@ def configure():
                 return redirect(url_for('admin_dashboard'))
             
             # Process Supervisors List
-            supervisors_db_data = []
-            supervisors_names_only = []
+            supervisors_db_data = [] # For UPSERT
             
             # Check if 'Password' column exists, else default
             has_password = 'Password' in df_supervisors.columns
-            # Check for 'Email ids' column
-            # Note: user said "Email ids" in the command output earlier.
             
             # Normalize column names just in case
             df_supervisors.columns = [c.strip() for c in df_supervisors.columns]
             
-            # Assuming Name is 'Name' and Email is 'Email ids'
-            
-            col_name = 'Name' if 'Name' in df_supervisors.columns else df_supervisors.columns[2] # Fallback index 2 based on previous view
+            # Assuming Name is 'Name' and Email is 'Email ids' (or column 2 and 4 fallback)
+            col_name = 'Name' if 'Name' in df_supervisors.columns else df_supervisors.columns[2]
             col_email = 'Email ids' if 'Email ids' in df_supervisors.columns else (df_supervisors.columns[4] if len(df_supervisors.columns) > 4 else None)
             
             if not col_email:
@@ -537,11 +533,9 @@ def configure():
                         password = str(val)
                 
                 supervisors_db_data.append({'name': name, 'email': email, 'password': password})
-                # Construct unique display string
-                supervisors_names_only.append(f"{name} ({email})")
             
             # Check if we got any valid supervisors
-            if not supervisors_names_only:
+            if not supervisors_db_data:
                 flash("No valid supervisors found in the Supervisors file. Please check the file format.", "danger")
                 return redirect(url_for('admin_dashboard'))
                 
@@ -553,38 +547,114 @@ def configure():
         db.upsert_blocks(rooms)
         db.upsert_supervisors(supervisors_db_data)
         
-        flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_names_only)} supervisors.", "success")
+        flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_db_data)} supervisors.", "success")
         
-        # Check for Timetable PDF
-        preloaded_sessions = []
+        # Check for Timetable PDF and SAVE IT
         if 'timetable_pdf' in request.files:
             pdf = request.files['timetable_pdf']
             if pdf and pdf.filename:
                 pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
                 pdf.save(pdf_path)
-                try:
-                    # Try Gemini first if API Key exists
-                    if os.getenv('GEMINI_API_KEY'):
-                        flash("Attempting PDF extraction with Gemini...")
-                        preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
-                    
-                    # Fallback or if Gemini returns empty
-                    if not preloaded_sessions:
-                        if os.getenv('GEMINI_API_KEY'):
-                             flash("Gemini returned no data, falling back to local extractor.")
-                        preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
-                    
-                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
-                except Exception as ex:
-                    flash(f"Error extracting PDF: {str(ex)}", "warning")
         
-        return render_template('configure.html', 
-                               rooms_json=json.dumps(rooms), 
-                               supervisors_json=json.dumps(supervisors_names_only),
-                               preloaded_sessions=json.dumps(preloaded_sessions))
+        # REDIRECT TO ROLE DEFINITION
+        # Fetch fresh list from DB (to get current roles/defaults)
+        full_supervisors = db.get_all_supervisors()
+        return render_template('define_roles.html', supervisors=full_supervisors)
                                
     except Exception as e:
         flash(f"An unexpected error occurred: {str(e)}", "danger")
+        return redirect(url_for('admin_dashboard'))
+
+@app.route('/save_roles', methods=['POST'])
+@admin_required
+def save_roles():
+    try:
+        # 1. Collect Form Data
+        updates = []
+        # We need to loop through submitted data. Since we used loop.index0 in template...
+        # But we don't know how many rows. We can iterate request.form keys.
+        
+        # Easier strategy: We passed email as hidden field 'email_{i}'.
+        # Find all keys starting with 'email_'
+        for key in request.form:
+            if key.startswith('email_'):
+                idx = key.split('_')[1]
+                email = request.form.get(f'email_{idx}')
+                role = request.form.get(f'role_{idx}')
+                start = request.form.get(f'start_{idx}')
+                end = request.form.get(f'end_{idx}')
+                
+                # Normalize empty dates
+                if not start: start = None
+                if not end: end = None
+                
+                updates.append({
+                    'email': email,
+                    'role': role,
+                    'start': start,
+                    'end': end
+                })
+        
+        # 2. Update DB
+        if updates:
+             db.update_supervisor_details(updates)
+             flash(f"Updated roles for {len(updates)} supervisors.", "success")
+             
+        # 3. Proceed to PDF Extraction (Original /configure logic continues here)
+        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
+        preloaded_sessions = []
+        
+        if os.path.exists(pdf_path):
+             try:
+                 # Try Gemini first if API Key exists
+                 if os.getenv('GEMINI_API_KEY'):
+                     flash("Attempting PDF extraction with Gemini...")
+                     preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
+                 
+                 # Fallback or if Gemini returns empty
+                 if not preloaded_sessions:
+                     if os.getenv('GEMINI_API_KEY'):
+                          flash("Gemini returned no data, falling back to local extractor.")
+                     preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
+                 
+                 flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
+             except Exception as ex:
+                 flash(f"Error extracting PDF: {str(ex)}", "warning")
+        else:
+             flash("No PDF file found from previous step. Please start over if needed.", "warning")
+
+        # 4. Fetch Data for configure.html
+        rooms = db.get_all_blocks()
+        full_supervisors = db.get_all_supervisors()
+        
+        # Convert supervisors to list of strings "Name (Email)" for JS compatibility
+        # Filter: Exclude HODs from the dropdown
+        supervisors_names_only = [
+            f"{s['name']} ({s['email']})" 
+            for s in full_supervisors 
+            if s.get('role') != 'HOD'
+        ]
+        
+        # Prepare constraints for frontend (Pre-filling unavailability)
+        # Format: {"Name (Email)": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}
+        supervisor_constraints = {}
+        for s in full_supervisors:
+            if s.get('unavailable_start') and s.get('unavailable_end'):
+                key = f"{s['name']} ({s['email']})"
+                supervisor_constraints[key] = {
+                    "start": s['unavailable_start'],
+                    "end": s['unavailable_end']
+                }
+    
+        # Render with constraints
+        return render_template('configure.html',
+                               rooms_json=json.dumps(rooms),
+                               supervisors_json=json.dumps(supervisors_names_only),
+                               preloaded_sessions=json.dumps(preloaded_sessions),
+                               supervisor_constraints=json.dumps(supervisor_constraints))
+
+    except Exception as e:
+        flash(f"An unexpected error occurred saving roles: {str(e)}", "danger")
         return redirect(url_for('admin_dashboard'))
 
 @app.route('/generate', methods=['POST'])
@@ -592,7 +662,12 @@ def configure():
 def generate():
     try:
         rooms = json.loads(request.form.get('rooms_json'))
-        supervisors = json.loads(request.form.get('supervisors_json'))
+        # supervisors = json.loads(request.form.get('supervisors_json')) # OLD: Strings
+        
+        # NEW: Fetch full supervisor details from DB to get Roles and Dates
+        supervisors_data = db.get_all_supervisors()
+        # Pass this list of dicts to scheduler
+        
         session_ids = request.form.getlist('session_ids')
         exam_name = request.form.get('exam_name', 'Untitled Exam')
         
@@ -657,8 +732,8 @@ def generate():
                 
                 sessions_data.append(item)
 
-        # Generate
-        result = scheduler.generate_schedule(rooms, supervisors, sessions_data)
+        # Generate (pass full objects)
+        result = scheduler.generate_schedule(rooms, supervisors_data, sessions_data)
         
         # Process & Save
         schedule_data = result['schedule']
@@ -667,7 +742,7 @@ def generate():
         if schedule_data:
             input_snapshot = {
                 'rooms': rooms,
-                'supervisors': supervisors,
+                'supervisors': supervisors_data, # Save full details
                 'sessions_data': sessions_data
             }
             db.save_schedule(exam_name, input_snapshot, schedule_data)

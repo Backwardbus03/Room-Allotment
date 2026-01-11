@@ -212,9 +212,9 @@
 <div id="loading-overlay">
     <div class="loading-card">
         <div class="spinner-premium"></div>
-        <div class="loading-title">Extracting Schedule Data</div>
+        <div class="loading-title">Processing...</div>
         <div class="loading-subtitle">
-            Allow us a moment. Gemini is analyzing your PDF to automatically populate exam sessions.
+            Please wait while we upload your files.
         </div>
     </div>
 </div>
@@ -239,13 +239,8 @@
                     return;
                 }
 
-                if (pdfInput.files.length > 0) {
-                    titleEl.textContent = "Extracting Schedule Data";
-                    subEl.textContent = "Gemini is analyzing your PDF to automatically populate exam sessions. This may take up to 30 seconds.";
-                } else {
-                    titleEl.textContent = "Processing Files";
-                    subEl.textContent = "Uploading your room and supervisor configurations...";
-                }
+                titleEl.textContent = "Processing Files";
+                subEl.textContent = "Uploading your room and supervisor configurations...";
                 overlay.classList.add('active');
             });
         }
