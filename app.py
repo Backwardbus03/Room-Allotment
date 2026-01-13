@@ -21,9 +21,14 @@ import mailer
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Ensure data directory exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
     os.makedirs(app.config['UPLOAD_FOLDER'])
+
+# Ensure Schema Migration
+try:
+    db.migrate_schema()
+except Exception as e:
+    print(f"Startup DB Migration Warning: {e}")
 
 # --- Helpers & Decorators ---
 
@@ -324,10 +329,16 @@ def admin_dashboard():
     
     schedule_html = None
     sorted_duties = None
+    allocation_errors = []
     
     if selected_exam:
         # Fetch full schedule
         schedule_data = db.get_full_schedule(selected_exam)
+        
+        # Fetch snapshot for errors
+        snapshot = db.get_schedule_snapshot(selected_exam)
+        if snapshot:
+            allocation_errors = snapshot.get('allocation_errors', [])
         
         if schedule_data:
             # Reconstruct the view
@@ -347,7 +358,26 @@ def admin_dashboard():
                         seen_assignments.add(key)
             
             # Legacy sort for display
-            sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+            sorted_duties_raw = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            # Post-process to split Name (Email)
+            sorted_duties = []
+            import re
+            for name_email_str, count in sorted_duties_raw:
+                # Try to parse "Name (email)"
+                match = re.search(r"^(.*?)\s*\((.*?)\)$", name_email_str)
+                if match:
+                    name_display = match.group(1).strip()
+                    email_display = match.group(2).strip()
+                else:
+                    name_display = name_email_str
+                    email_display = ""
+                    
+                sorted_duties.append({
+                    'name': name_display,
+                    'email': email_display,
+                    'count': count
+                })
             
             # Separate Main Allocations vs Backups/Relievers
             main_allocations = []
@@ -411,6 +441,7 @@ def admin_dashboard():
                                    backup_allocations=backup_allocations,
                                    exam_name=selected_exam,
                                    issues=issues,
+                                   allocation_errors=allocation_errors,
                                    is_history=True)
                                    
     return render_template('index.html', exams=exams)
@@ -548,17 +579,25 @@ def configure():
             return redirect(url_for('admin_dashboard'))
         
         # SAVE TO DB
+        # 1. Clear old rooms to ensure exact match with Excel
+        db.delete_all_blocks()
+        
+        # 2. Add new rooms
         db.upsert_blocks(rooms)
         db.upsert_supervisors(supervisors_db_data)
         
         flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_db_data)} supervisors.", "success")
         
         # Check for Timetable PDF and SAVE IT
-        if 'timetable_pdf' in request.files:
-            pdf = request.files['timetable_pdf']
-            if pdf and pdf.filename:
-                pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
-                pdf.save(pdf_path)
+        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
+        pdf = request.files.get('timetable_pdf')
+        
+        if pdf and pdf.filename:
+            pdf.save(pdf_path)
+        else:
+            # If no new file uploaded (or key missing), ensure we don't keep the old one
+            if os.path.exists(pdf_path):
+                 os.remove(pdf_path)
         
         # REDIRECT TO ROLE DEFINITION
         # Fetch fresh list from DB (to get current roles/defaults)
@@ -741,86 +780,32 @@ def generate():
         
         # Process & Save
         schedule_data = result['schedule']
+        unallocated_students = result.get('unallocated', [])
+        
+        # Detect Supervisor Assignment Failures
+        supervisor_failures = []
+        if schedule_data:
+            for row in schedule_data:
+                if row.get('Supervisor') == 'NOBODY AVAILABLE':
+                    msg = f"No supervisor available for {row.get('Role')} at {row.get('Block')} on {row.get('Date')} ({row.get('Time')})"
+                    supervisor_failures.append(msg)
+        
+        allocation_errors = unallocated_students + supervisor_failures
         
         # SAVE TO DB (New Snapshot method)
         if schedule_data:
             input_snapshot = {
                 'rooms': rooms,
                 'supervisors': supervisors_data, # Save full details
-                'sessions_data': sessions_data
+                'sessions_data': sessions_data,
+                'allocation_errors': allocation_errors
             }
-            db.save_schedule(exam_name, input_snapshot, schedule_data)
+            # Save as Draft (published=False)
+            db.save_schedule(exam_name, input_snapshot, schedule_data, published=False)
             
-            # --- SEND EMAILS ---
-            try:
-                flash("Schedule saved. Sending notification emails...", "info")
-                print("--- STARTING EMAIL NOTIFICATIONS ---")
-                
-                # 0. Generate Master PDF & Workload PDF for Admin
-                try:
-                    admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
-                    workload_pdf_bytes = _generate_workload_pdf_bytes(exam_name, schedule_data)
-                    
-                    print(f"Generated Admin PDF: {len(admin_pdf_bytes)} bytes")
-                    print(f"Generated Workload PDF: {len(workload_pdf_bytes)} bytes")
-                    
-                    admin_email = app.config.get('MAIL_ADMIN')
-                    if admin_email:
-                        print(f"Sending Admin Notification to {admin_email}")
-                        mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, workload_pdf_bytes, "Generated")
-                    else:
-                        print("MAIL_ADMIN not set, skipping Admin email.")
-                except Exception as e_admin:
-                    print(f"ERROR Sending Admin Email: {e_admin}")
-                
-                # 1. Group by Supervisor
-                supervisor_schedules = {}
-                for row in schedule_data:
-                    sup_name = row.get('Supervisor')
-                    if sup_name and sup_name != 'NA' and sup_name != 'NOBODY AVAILABLE':
-                        if sup_name not in supervisor_schedules:
-                            supervisor_schedules[sup_name] = []
-                        supervisor_schedules[sup_name].append(row)
-                
-                print(f"Found {len(supervisor_schedules)} supervisors to notify.")
-                        
-                # 2. Get Supervisors to find Emails
-                sup_lookup = {s['name']: s['email'] for s in supervisors_data}
-                
-                # 3. Send Emails
-                count_sent = 0
-                for sup_name, rows in supervisor_schedules.items():
-                    # Extract email logic...
-                    email = None
-                    if "(" in sup_name and sup_name.endswith(")"):
-                        parts = sup_name.rsplit('(', 1)
-                        if len(parts) > 1:
-                            email = parts[1].rstrip(')').strip()
-                    if not email:
-                         email = sup_lookup.get(sup_name)
-                         
-                    if email:
-                        try:
-                            # Generate PERSONAL PDF
-                            sup_pdf_bytes = _generate_supervisor_pdf_bytes(exam_name, sup_name, rows)
-                            print(f"Sending Superviser Email to {sup_name} ({email}) - PDF: {len(sup_pdf_bytes)} bytes")
-                            mailer.send_schedule_notification(email, sup_name, exam_name, rows, pdf_bytes=sup_pdf_bytes)
-                            count_sent += 1
-                        except Exception as e_sup:
-                             print(f"ERROR Sending Email to {sup_name}: {e_sup}")
-                    else:
-                        print(f"Skipping {sup_name} - No Email Found")
-                
-                if count_sent > 0:
-                     flash(f"Emails triggered for {count_sent} supervisors + Admin.", "success")
-                else:
-                     flash("No supervisor emails sent (Emails not found). Admin email sent if configured.", "warning")
-                
-                print(f"--- EMAIL NOTIFICATIONS DONE. Sent: {count_sent} ---")
-                     
-            except Exception as e:
-                print(f"--- CRITICAL EMAIL ERROR: {e} ---")
-                flash(f"Error sending emails: {str(e)}", "danger")
+            # --- SEND EMAILS (MOVED TO MANUAL PUBLISH) ---
+            flash("Schedule saved successfully. Please review and click 'Publish' to send emails.", "success")
+
         
         # Separate Main Allocations vs Backups/Relievers
         main_allocations = []
@@ -866,7 +851,26 @@ def generate():
             schedule_html = "<p>No main allocations generated.</p>"
 
         duty_counts = result['duties']
-        sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+        sorted_duties_raw = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # Post-process to split Name (Email) - MATCHING admin_dashboard logic
+        sorted_duties = []
+        import re
+        for name_email_str, count in sorted_duties_raw:
+            # Try to parse "Name (email)"
+            match = re.search(r"^(.*?)\s*\((.*?)\)$", name_email_str)
+            if match:
+                name_display = match.group(1).strip()
+                email_display = match.group(2).strip()
+            else:
+                name_display = name_email_str
+                email_display = ""
+                
+            sorted_duties.append({
+                'name': name_display,
+                'email': email_display,
+                'count': count
+            })
         
         return render_template('result.html', 
                                duty_report=sorted_duties, 
@@ -879,6 +883,109 @@ def generate():
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
 
+# --- Publish Route ---
+
+def _publish_schedule_emails(exam_name, schedule_data, supervisors_data):
+    """
+    Helper to send emails for a published schedule.
+    """
+    try:
+        print(f"--- STARTING PUBLISH EMAIL NOTIFICATIONS FOR {exam_name} ---")
+        
+        # 0. Generate Master PDF & Workload PDF for Admin
+        try:
+            admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+            workload_pdf_bytes = _generate_workload_pdf_bytes(exam_name, schedule_data)
+            
+            print(f"Generated Admin PDF: {len(admin_pdf_bytes)} bytes")
+            print(f"Generated Workload PDF: {len(workload_pdf_bytes)} bytes")
+            
+            admin_email = app.config.get('MAIL_ADMIN')
+            if admin_email:
+                print(f"Sending Admin Notification to {admin_email}")
+                mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, workload_pdf_bytes, "Published")
+            else:
+                print("MAIL_ADMIN not set, skipping Admin email.")
+        except Exception as e_admin:
+            print(f"ERROR Sending Admin Email: {e_admin}")
+        
+        # 1. Group by Supervisor
+        supervisor_schedules = {}
+        for row in schedule_data:
+            sup_name = row.get('Supervisor')
+            if sup_name and sup_name != 'NA' and sup_name != 'NOBODY AVAILABLE':
+                if sup_name not in supervisor_schedules:
+                    supervisor_schedules[sup_name] = []
+                supervisor_schedules[sup_name].append(row)
+        
+        print(f"Found {len(supervisor_schedules)} supervisors to notify.")
+                
+        # 2. Get Supervisors to find Emails
+        sup_lookup = {s['name']: s['email'] for s in supervisors_data}
+        
+        # 3. Send Emails
+        count_sent = 0
+        for sup_name, rows in supervisor_schedules.items():
+            # Extract email logic...
+            email = None
+            if "(" in sup_name and sup_name.endswith(")"):
+                parts = sup_name.rsplit('(', 1)
+                if len(parts) > 1:
+                    email = parts[1].rstrip(')').strip()
+            if not email:
+                    email = sup_lookup.get(sup_name)
+                    
+            if email:
+                try:
+                    # Generate PERSONAL PDF
+                    sup_pdf_bytes = _generate_supervisor_pdf_bytes(exam_name, sup_name, rows)
+                    print(f"Sending Supervisor Email to {sup_name} ({email}) - PDF: {len(sup_pdf_bytes)} bytes")
+                    mailer.send_schedule_notification(email, sup_name, exam_name, rows, pdf_bytes=sup_pdf_bytes)
+                    count_sent += 1
+                except Exception as e_sup:
+                        print(f"ERROR Sending Email to {sup_name}: {e_sup}")
+            else:
+                print(f"Skipping {sup_name} - No Email Found")
+
+        return count_sent
+
+    except Exception as e:
+        print(f"--- CRITICAL EMAIL ERROR: {e} ---")
+        raise e
+
+@app.route('/publish_schedule', methods=['POST'])
+@admin_required
+def publish_schedule():
+    exam_name = request.form.get('exam_name')
+    if not exam_name:
+        flash("Result missing exam name.", "danger")
+        return redirect(url_for('admin_dashboard'))
+        
+    try:
+        schedule_data = db.get_full_schedule(exam_name)
+        if not schedule_data:
+            flash("No schedule found to publish.", "warning")
+            return redirect(url_for('admin_dashboard'))
+
+        # Need supervisor data for emails
+        supervisors_data = db.get_all_supervisors()
+        
+        # 1. Publish in DB
+        db.publish_schedule_db(exam_name)
+        
+        # 2. Send Emails
+        count = _publish_schedule_emails(exam_name, schedule_data, supervisors_data)
+        
+        if count > 0:
+            flash(f"Schedule published! Emails sent to {count} supervisors + Admin.", "success")
+        else:
+            flash("Schedule published but no supervisor emails found/sent.", "warning")
+            
+    except Exception as e:
+        flash(f"Error publishing schedule: {str(e)}", "danger")
+        
+    return redirect(url_for('admin_dashboard', exam_name=exam_name))
+    
 # --- PDF Helpers ---
 
 def _generate_timetable_pdf_bytes(exam_name, schedule_data):
@@ -1279,7 +1386,8 @@ def supervisor_dashboard():
     user_name_simple = session.get('user_name') # Just name for display
     
     # 1. Fetch available exams that have schedules
-    available_exams = db.get_available_exams() # Returns [{'name':..., 'date':...}, ...]
+    # Supervisors see ONLY published exams
+    available_exams = db.get_available_exams(published_only=True)
     
     # 2. Check if a specific exam is selected OR default to latest
     selected_exam = request.args.get('exam_name')
