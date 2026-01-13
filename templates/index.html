@@ -123,11 +123,12 @@
                         </div>
 
                         <div class="mb-4">
-                            <label for="timetable_pdf" class="form-label fw-medium">Timetable PDF <span
-                                    class="text-muted fw-normal">(Optional)</span></label>
+                            <label for="timetable_pdf" class="form-label fw-medium">Timetable PDFs <span
+                                    class="text-muted fw-normal">(Optional, select multiple)</span></label>
                             <input class="form-control" type="file" id="timetable_pdf" name="timetable_pdf"
-                                accept=".pdf">
-                            <div class="form-text text-xs">Auto-extracts Date, Time, and Subject</div>
+                                accept=".pdf" multiple>
+                            <div class="form-text text-xs">Auto-extracts Date, Time, and Subject from multiple files
+                            </div>
                         </div>
 
                         <button type="submit" class="btn btn-primary w-100 py-2">

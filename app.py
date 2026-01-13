@@ -553,12 +553,36 @@ def configure():
         
         flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_db_data)} supervisors.", "success")
         
-        # Check for Timetable PDF and SAVE IT
+        # Check for Timetable PDF(s) and SAVE THEM
         if 'timetable_pdf' in request.files:
-            pdf = request.files['timetable_pdf']
-            if pdf and pdf.filename:
-                pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
-                pdf.save(pdf_path)
+            files = request.files.getlist('timetable_pdf')
+            temp_pdf_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_pdfs')
+            
+            # Ensure directory exists
+            if not os.path.exists(temp_pdf_dir):
+                os.makedirs(temp_pdf_dir)
+            
+            # Clear existing files to avoid mixing with previous attempts
+            for f_name in os.listdir(temp_pdf_dir):
+                file_path = os.path.join(temp_pdf_dir, f_name)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"Error deleting {file_path}: {e}")
+
+            count_pdfs = 0
+            for pdf in files:
+                if pdf and pdf.filename:
+                     # Use original filename but secure it? Flask's secure_filename is good but 
+                     # we want to keep identifiable names like 'FE.pdf'. 
+                     # Just using basename is usually enough for internal temp storage.
+                     safe_name = os.path.basename(pdf.filename)
+                     pdf.save(os.path.join(temp_pdf_dir, safe_name))
+                     count_pdfs += 1
+            
+            if count_pdfs > 0:
+                flash(f"Uploaded {count_pdfs} timetable PDF(s).", "info")
         
         # REDIRECT TO ROLE DEFINITION
         # Fetch fresh list from DB (to get current roles/defaults)
@@ -605,27 +629,60 @@ def save_roles():
              flash(f"Updated roles for {len(updates)} supervisors.", "success")
              
         # 3. Proceed to PDF Extraction (Original /configure logic continues here)
-        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
+        # 3. Proceed to PDF Extraction
+        temp_pdf_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_pdfs')
         preloaded_sessions = []
         
-        if os.path.exists(pdf_path):
-             try:
-                 # Try Gemini first if API Key exists
-                 if os.getenv('GEMINI_API_KEY'):
-                     flash("Attempting PDF extraction with Gemini...")
-                     preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
-                 
-                 # Fallback or if Gemini returns empty
-                 if not preloaded_sessions:
+        pdf_files = []
+        if os.path.exists(temp_pdf_dir):
+            pdf_files = [f for f in os.listdir(temp_pdf_dir) if f.lower().endswith('.pdf')]
+        
+        if pdf_files:
+             total_files = 0
+             total_sessions = 0
+             
+             for f_name in pdf_files:
+                 pdf_path = os.path.join(temp_pdf_dir, f_name)
+                 file_sessions = []
+                 try:
+                     # Try Gemini first if API Key exists
                      if os.getenv('GEMINI_API_KEY'):
-                          flash("Gemini returned no data, falling back to local extractor.")
-                     preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
-                 
-                 flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
-             except Exception as ex:
-                 flash(f"Error extracting PDF: {str(ex)}", "warning")
+                         # flash(f"Extracting {f_name}...", "info")
+                         file_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
+                     
+                     # Fallback or if Gemini returns empty
+                     if not file_sessions:
+                         # Only warn if we expected Gemini to work
+                         # if os.getenv('GEMINI_API_KEY'):
+                         #      flash(f"Gemini empty for {f_name}, using fallback.", "warning")
+                         file_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
+                     
+                     if file_sessions:
+                         preloaded_sessions.extend(file_sessions)
+                         total_sessions += len(file_sessions)
+                         total_files += 1
+                         
+                 except Exception as ex:
+                     flash(f"Error extracting {f_name}: {str(ex)}", "warning")
+             
+             if total_sessions > 0:
+                 flash(f"Extracted {total_sessions} total sessions from {total_files} file(s).", "success")
+             else:
+                 flash("No sessions extracted from uploaded files.", "warning")
         else:
-             flash("No PDF file found from previous step. Please start over if needed.", "warning")
+             # Check for legacy single file just in case?
+             legacy_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
+             if os.path.exists(legacy_path):
+                 try:
+                     if os.getenv('GEMINI_API_KEY'):
+                        preloaded_sessions = extract_pdf.parse_schedule_with_gemini(legacy_path)
+                     if not preloaded_sessions:
+                        preloaded_sessions = extract_pdf.extract_sessions_from_pdf(legacy_path)
+                     flash(f"Extracted {len(preloaded_sessions)} sessions from single PDF (legacy mode).", "info")
+                 except:
+                     pass
+             else:
+                 flash("No PDF files found to process.", "warning")
 
         # 4. Fetch Data for configure.html
         rooms = db.get_all_blocks()

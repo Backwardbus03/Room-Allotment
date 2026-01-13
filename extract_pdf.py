@@ -244,13 +244,15 @@ def parse_schedule_with_gemini(pdf_path):
         - "end_time": End time in HH:MM (24-hour) format.
         - "subject": The full name of the subject/paper.
         - "department": The department or stream (e.g., CSE, MECH, MBA) if clearly identifiable, else empty string.
+        - "year": The year/class (e.g., FE, SE, TE, BE) if mentioned in the header or text, else empty string.
         
         Rules:
         1. Ignore header rows or irrelevant text.
         2. Ensure dates are normalized.
         3. Convert all times to 24-hour format.
-        4. If a session spans multiple subjects/departments listed in columns, create separate entries for each.
-        5. RETURN ONLY RAW JSON. NO MARKDOWN FORMATTING.
+        4. If the document title mentions the Year/Class (e.g., "S.E. Sem III"), apply it to all sessions.
+        5. If a session spans multiple subjects/departments listed in columns, create separate entries for each.
+        6. RETURN ONLY RAW JSON. NO MARKDOWN FORMATTING.
         """
         
         # New model name request
