@@ -141,14 +141,14 @@ def send_issue_reported_notification(admin_email, exam_name, supervisor_name, is
     """
     send_email(subject, admin_email, html_body)
 
-def send_admin_schedule_notification(admin_email, exam_name, pdf_bytes, update_type="Generated"):
+def send_admin_schedule_notification(admin_email, exam_name, pdf_bytes, workload_pdf_bytes=None, update_type="Generated"):
     subject = f"Master Schedule {update_type} - {exam_name}"
     
     html_body = f"""
     <html>
     <body>
         <p>The Master Schedule for <strong>{exam_name}</strong> has been {update_type.lower()}.</p>
-        <p>Please find the full schedule attached.</p>
+        <p>Please find the schedule(s) attached.</p>
     </body>
     </html>
     """
@@ -158,6 +158,13 @@ def send_admin_schedule_notification(admin_email, exam_name, pdf_bytes, update_t
         attachments.append({
             'filename': f"{exam_name}_Master_Schedule.pdf".replace(" ", "_"),
             'data': pdf_bytes,
+            'content_type': 'application/pdf'
+        })
+        
+    if workload_pdf_bytes:
+        attachments.append({
+            'filename': f"{exam_name}_Workload_Report.pdf".replace(" ", "_"),
+            'data': workload_pdf_bytes,
             'content_type': 'application/pdf'
         })
         
@@ -180,7 +187,7 @@ def send_swap_rejection(supervisor_email, supervisor_name, exam_name, reason):
     
     send_email(subject, supervisor_email, html_body)
 
-def send_swap_acceptance(supervisor_A_email, supervisor_A_name, supervisor_B_email, supervisor_B_name, exam_name, schedule_A, schedule_B):
+def send_swap_acceptance(supervisor_A_email, supervisor_A_name, supervisor_B_email, supervisor_B_name, exam_name, schedule_A, schedule_B, pdf_A_bytes=None, pdf_B_bytes=None):
     """
     Sends updated schedule to BOTH supervisors A and B.
     """
@@ -200,7 +207,15 @@ def send_swap_acceptance(supervisor_A_email, supervisor_A_name, supervisor_B_ema
     </body>
     </html>
     """
-    send_email(subject_A, supervisor_A_email, body_A)
+    
+    atts_A = []
+    if pdf_A_bytes:
+        atts_A.append({
+            'filename': f"{exam_name}_{supervisor_A_name}_Schedule.pdf".replace(" ", "_"),
+            'data': pdf_A_bytes,
+            'content_type': 'application/pdf'
+        })
+    send_email(subject_A, supervisor_A_email, body_A, atts_A)
     
     # Email to Supervisor B
     subject_B = f"Duty Swap Request Accepted - {exam_name}"
@@ -217,4 +232,12 @@ def send_swap_acceptance(supervisor_A_email, supervisor_A_name, supervisor_B_ema
     </body>
     </html>
     """
-    send_email(subject_B, supervisor_B_email, body_B)
+    
+    atts_B = []
+    if pdf_B_bytes:
+        atts_B.append({
+            'filename': f"{exam_name}_{supervisor_B_name}_Schedule.pdf".replace(" ", "_"),
+            'data': pdf_B_bytes,
+            'content_type': 'application/pdf'
+        })
+    send_email(subject_B, supervisor_B_email, body_B, atts_B)

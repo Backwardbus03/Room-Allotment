@@ -756,14 +756,18 @@ def generate():
                 flash("Schedule saved. Sending notification emails...", "info")
                 print("--- STARTING EMAIL NOTIFICATIONS ---")
                 
-                # 0. Generate Master PDF for Admin
+                # 0. Generate Master PDF & Workload PDF for Admin
                 try:
                     admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+                    workload_pdf_bytes = _generate_workload_pdf_bytes(exam_name, schedule_data)
+                    
                     print(f"Generated Admin PDF: {len(admin_pdf_bytes)} bytes")
+                    print(f"Generated Workload PDF: {len(workload_pdf_bytes)} bytes")
+                    
                     admin_email = app.config.get('MAIL_ADMIN')
                     if admin_email:
                         print(f"Sending Admin Notification to {admin_email}")
-                        mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, "Generated")
+                        mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, workload_pdf_bytes, "Generated")
                     else:
                         print("MAIL_ADMIN not set, skipping Admin email.")
                 except Exception as e_admin:
@@ -935,6 +939,50 @@ def _generate_timetable_pdf_bytes(exam_name, schedule_data):
     elements.append(table)
     
     doc.build(elements)
+
+    return buffer.getvalue()
+
+def _generate_workload_pdf_bytes(exam_name, schedule_data):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    
+    elements = []
+    title_text = f"SUPERVISOR WORKLOAD REPORT - {exam_name}"
+    elements.append(Paragraph(title_text, styles['Title']))
+    
+    # 1. Calculate Counts
+    duty_counts = {}
+    seen_assignments = set()
+    for row in schedule_data:
+        sup = row.get('Supervisor', 'Unknown')
+        if sup != 'NA' and sup != 'NOBODY AVAILABLE' and sup:
+            key = (sup, row.get('Date'), row.get('Time'), row.get('Block'))
+            if key not in seen_assignments:
+                duty_counts[sup] = duty_counts.get(sup, 0) + 1
+                seen_assignments.add(key)
+    
+    sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # 2. Build Table Data
+    data = [["Supervisor Name", "Total Duties"]]
+    for name, count in sorted_duties:
+        data.append([name, str(count)])
+        
+    table = Table(data, colWidths=[350, 100])
+    table.setStyle(TableStyle([
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
+            ('ALIGN', (0,1), (0,-1), 'LEFT'),
+            ('LEFTPADDING', (0,1), (0,-1), 15),
+            ('ALIGN', (1,1), (1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e40af")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f3f4f6")])
+    ]))
+    
+    elements.append(table)
+    doc.build(elements)
     return buffer.getvalue()
 
 def _generate_supervisor_pdf_bytes(exam_name, supervisor_name, my_duties):
@@ -994,47 +1042,8 @@ def export_pdf():
 
     if export_type == 'workload':
         # --- WORKLOAD REPORT ---
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
-        styles = getSampleStyleSheet()
-        
-        elements = []
-        title_text = f"SUPERVISOR WORKLOAD REPORT - {selected_exam}"
-        elements.append(Paragraph(title_text, styles['Title']))
-        
-        # 1. Calculate Counts
-        duty_counts = {}
-        seen_assignments = set()
-        for row in results:
-            sup = row.get('Supervisor', 'Unknown')
-            if sup != 'NA' and sup != 'NOBODY AVAILABLE' and sup:
-                key = (sup, row.get('Date'), row.get('Time'), row.get('Block'))
-                if key not in seen_assignments:
-                    duty_counts[sup] = duty_counts.get(sup, 0) + 1
-                    seen_assignments.add(key)
-        
-        sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
-        
-        # 2. Build Table Data
-        data = [["Supervisor Name", "Total Duties"]]
-        for name, count in sorted_duties:
-            data.append([name, str(count)])
-            
-        table = Table(data, colWidths=[350, 100])
-        table.setStyle(TableStyle([
-             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
-             ('ALIGN', (0,1), (0,-1), 'LEFT'),
-             ('LEFTPADDING', (0,1), (0,-1), 15),
-             ('ALIGN', (1,1), (1,-1), 'CENTER'),
-             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e40af")),
-             ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-             ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f3f4f6")])
-        ]))
-        
-        elements.append(table)
-        doc.build(elements)
-        buffer.seek(0)
+        pdf_bytes = _generate_workload_pdf_bytes(selected_exam, results)
+        buffer = io.BytesIO(pdf_bytes)
         filename = f"{selected_exam.replace(' ', '_')}_Workload_Report.pdf"
         
     else:
@@ -1177,29 +1186,33 @@ def resolve_issue():
             email_A = get_email_safe(supervisor_A, sup_lookup)
             email_B = get_email_safe(supervisor_B, sup_lookup)
             
+            # 2. Get New Schedules (Filter from the `schedule_data` we just updated!)
+            sched_A = [r for r in schedule_data if r['Supervisor'] == supervisor_A]
+            sched_B = [r for r in schedule_data if r['Supervisor'] == supervisor_B]
+            
+            # 3. Generate PDFs for Supervisors
+            pdf_A_bytes = _generate_supervisor_pdf_bytes(exam_name, supervisor_A, sched_A)
+            pdf_B_bytes = _generate_supervisor_pdf_bytes(exam_name, supervisor_B, sched_B)
+
+            # 4. Generate PDFs for Admin (Updated Master + Workload)
+            admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+            workload_pdf_bytes = _generate_workload_pdf_bytes(exam_name, schedule_data)
+            
+            # 5. Send to Supervisors
             if email_A and email_B:
-                 # 2. Get New Schedules (Filter from the `schedule_data` we just updated!)
-                 # No need to refetch from DB.
-                 sched_A = [r for r in schedule_data if r['Supervisor'] == supervisor_A]
-                 sched_B = [r for r in schedule_data if r['Supervisor'] == supervisor_B]
-                 
-                 # 3. Send
-                 mailer.send_swap_acceptance(email_A, supervisor_A, email_B, supervisor_B, exam_name, sched_A, sched_B)
+                 mailer.send_swap_acceptance(email_A, supervisor_A, email_B, supervisor_B, exam_name, sched_A, sched_B, pdf_A_bytes, pdf_B_bytes)
                  flash("Emails sent to both supervisors.", "success")
             else:
                  flash("Could not find emails for one or both supervisors.", "warning")
             
-            # Notify Admin with Updated Master Schedule
+            # 6. Send to Admin
             admin_email = app.config.get('MAIL_ADMIN')
             if admin_email:
-                # Need to use the schedule_data (which is now updated in memory? yes line 1084 calls db.update_schedule(..., schedule_data))
-                # So schedule_data variable holds the NEW state.
-                admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
-                mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, "Updated")
-                 
+                mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, workload_pdf_bytes, "Updated (Swap Accepted)")
+            
         except Exception as e_mail:
-            flash(f"Error sending acceptance emails: {e_mail}", "warning")
-
+            print(f"Error sending acceptance emails: {e_mail}")
+            flash(f"Error sending acceptance emails: {str(e_mail)}", "warning")
         flash(f"Swap successful. {supervisor_A} and {supervisor_B} swapped.")
     else:
         flash("Error saving updated schedule.")
