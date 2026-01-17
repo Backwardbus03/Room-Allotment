@@ -309,7 +309,8 @@ def generate_schedule(rooms, supervisors, sessions_data):
 
     return {
         "schedule": assignments,
-        "duties": dict(duty_count)
+        "duties": dict(duty_count),
+        "unallocated": unallocated 
     }
 
 

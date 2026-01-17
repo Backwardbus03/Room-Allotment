@@ -166,6 +166,13 @@
                                             {{ exam.issue_count }} <i class="bi bi-exclamation-circle-fill small"></i>
                                         </span>
                                         {% endif %}
+                                        {% if query_params or not exam.is_published %}
+                                        {% if not exam.is_published %}
+                                        <span class="badge bg-secondary rounded-pill ms-2 text-uppercase"
+                                            style="font-size: 0.7em;">Draft</span>
+                                        {% endif %}
+                                        {% endif %}
+
                                     </td>
                                     <td class="small text-muted">{{ exam.date.strftime('%Y-%m-%d %H:%M') if exam.date
                                         else 'N/A' }}</td>

@@ -27,6 +27,26 @@ def get_connection():
         print(f"Failed to connect to DB: {e}")
         return None
 
+
+def migrate_schema():
+    """Ensures DB schema is up to date."""
+    conn = get_connection()
+    if not conn: return
+    try:
+        cur = conn.cursor()
+        # Add is_published column if not exists
+        cur.execute("""
+            ALTER TABLE schedules 
+            ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE;
+        """)
+        conn.commit()
+        cur.close()
+        print("Schema migration checked/applied.")
+    except Exception as e:
+        print(f"Schema migration error: {e}")
+    finally:
+        conn.close()
+
 def upsert_supervisors(supervisors_list):
     """
     Upserts a list of supervisors. 
@@ -214,7 +234,27 @@ def upsert_blocks(rooms_list):
     finally:
         conn.close()
 
-def save_schedule(exam_name, input_snapshot, schedule_result):
+def delete_all_blocks():
+    """
+    Deletes all rows from the blocks table.
+    Used to clear old rooms before importing a new Excel file.
+    """
+    conn = get_connection()
+    if not conn: return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM blocks;")
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"Error deleting blocks: {e}")
+        return False
+    finally:
+        conn.close()
+
+def save_schedule(exam_name, input_snapshot, schedule_result, published=False):
     """
     Saves the new schedule as a snapshot.
     """
@@ -223,22 +263,29 @@ def save_schedule(exam_name, input_snapshot, schedule_result):
     
     try:
         cur = conn.cursor()
-        
-        # Insert or Update (Assuming we might want to update if same exam name? 
-        # For now let's just Insert, or assume exam names are unique-ish enough or we allow duplicates)
-        # Using JSONB for postgres
         import json
         
-        query = """
-        INSERT INTO schedules (exam_name, input_snapshot, schedule_result)
-        VALUES (%s, %s, %s)
-        """
+        # Check if exists to update or insert (Upsert)
+        # Using simple check-then-insert/update logic for compatibility
+        cur.execute("SELECT id FROM schedules WHERE exam_name = %s", (exam_name,))
+        row = cur.fetchone()
         
-        cur.execute(query, (
-            exam_name, 
-            json.dumps(input_snapshot), 
-            json.dumps(schedule_result)
-        ))
+        input_json = json.dumps(input_snapshot)
+        result_json = json.dumps(schedule_result)
+        
+        if row:
+            # Update existing
+            cur.execute("""
+                UPDATE schedules 
+                SET input_snapshot = %s, schedule_result = %s, is_published = %s, created_at = NOW()
+                WHERE exam_name = %s
+            """, (input_json, result_json, published, exam_name))
+        else:
+            # Insert new
+            cur.execute("""
+                INSERT INTO schedules (exam_name, input_snapshot, schedule_result, is_published)
+                VALUES (%s, %s, %s, %s)
+            """, (exam_name, input_json, result_json, published))
         
         conn.commit()
         cur.close()
@@ -247,25 +294,62 @@ def save_schedule(exam_name, input_snapshot, schedule_result):
     finally:
         conn.close()
 
-def get_available_exams():
+def publish_schedule_db(exam_name):
+    """Sets is_published to True for an exam."""
+    conn = get_connection()
+    if not conn: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE schedules SET is_published = TRUE WHERE exam_name = %s", (exam_name,))
+        updated = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        return updated
+    except Exception as e:
+        print(f"Error publishing schedule DB: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_available_exams(published_only=False):
     """Returns list of distinct exam names available in the db."""
     conn = get_connection()
     if not conn: return []
     
     try:
         cur = conn.cursor()
-        query = """
-        SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues
-        FROM schedules s
-        LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
-        GROUP BY s.exam_name, s.created_at
-        ORDER BY s.created_at DESC
-        """
+        
+        if published_only:
+             query = """
+            SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues
+            FROM schedules s
+            LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
+            WHERE s.is_published = TRUE
+            GROUP BY s.exam_name, s.created_at
+            ORDER BY s.created_at DESC
+            """
+        else:
+            query = """
+            SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues, s.is_published
+            FROM schedules s
+            LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
+            GROUP BY s.exam_name, s.created_at, s.is_published
+            ORDER BY s.created_at DESC
+            """
+            
         cur.execute(query)
         rows = cur.fetchall()
         cur.close()
-        # Return dict with issue count
-        return [{'name': r[0], 'date': r[1], 'issue_count': r[2]} for r in rows]
+        
+        results = []
+        for r in rows:
+            item = {'name': r[0], 'date': r[1], 'issue_count': r[2]}
+            if not published_only:
+                 # Add status for admin
+                 item['is_published'] = r[3] if len(r) > 3 else True
+            results.append(item)
+            
+        return results
     except Exception as e:
         print(f"Error fetching exams: {e}")
         return []
@@ -324,6 +408,29 @@ def get_full_schedule(exam_name):
     except Exception as e:
         print(f"Error fetching full schedule: {e}")
         return []
+    finally:
+        conn.close()
+
+def get_schedule_snapshot(exam_name):
+    """
+    Fetch the input_snapshot for a specific exam.
+    Used to retrieve persistent metadata like allocation errors.
+    """
+    conn = get_connection()
+    if not conn: return {}
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT input_snapshot FROM schedules WHERE exam_name = %s", (exam_name,))
+        row = cur.fetchone()
+        cur.close()
+        
+        if not row or not row['input_snapshot']: return {}
+        return row['input_snapshot'] 
+        
+    except Exception as e:
+        print(f"Error fetching snapshot: {e}")
+        return {}
     finally:
         conn.close()
 

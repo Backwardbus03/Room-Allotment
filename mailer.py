@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 def send_async_email(app, msg):
     with app.app_context():
         try:
-            print(f"[MAIL DEBUG] Connecting to SMTP: {app.config['MAIL_SERVER']}:{app.config['MAIL_PORT']}")
             server = smtplib.SMTP(app.config['MAIL_SERVER'], app.config['MAIL_PORT'])
             server.set_debuglevel(1) # verbose on console
             if app.config['MAIL_USE_TLS']:
@@ -28,10 +27,8 @@ def send_async_email(app, msg):
             
             server.send_message(msg)
             server.quit()
-            print(f"[MAIL DEBUG] Email sent successfully to {msg['To']}")
             logger.info(f"Email sent to {msg['To']}")
         except Exception as e:
-            print(f"[MAIL DEBUG] FAILED to send email to {msg['To']}: {e}")
             logger.error(f"Failed to send email: {e}")
 
 # ... (test_email_connection existing) ...
@@ -40,7 +37,6 @@ def send_email(subject, recipient, html_body, attachments=None):
     """
     attachments: list of dicts {'filename': str, 'data': bytes, 'content_type': str}
     """
-    print(f"[MAIL DEBUG] Preparing email '{subject}' to {recipient}")
     app = current_app._get_current_object()
     
     msg = MIMEMultipart()
@@ -51,7 +47,6 @@ def send_email(subject, recipient, html_body, attachments=None):
     msg.attach(MIMEText(html_body, 'html'))
     
     if attachments:
-        print(f"[MAIL DEBUG] Attaching {len(attachments)} files...")
         for att in attachments:
             part = MIMEApplication(att['data'], Name=att['filename'])
             part['Content-Disposition'] = f'attachment; filename="{att["filename"]}"'
