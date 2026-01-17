@@ -41,7 +41,8 @@ try:
         password TEXT,
         role TEXT DEFAULT 'Teacher',
         unavailable_start TEXT,
-        unavailable_end TEXT
+        unavailable_end TEXT,
+        is_active BOOLEAN DEFAULT TRUE
     );
     """)
     print("- Supervisors table recreated (Previous data deleted).")

@@ -41,18 +41,24 @@ def upsert_supervisors(supervisors_list):
         # We use executemany for bulk upsert
         # ON CONFLICT(email) DO UPDATE password, name
         
+        # 1. MARK ALL AS INACTIVE FIRST
+        # This ensures that anyone NOT in the new list becomes inactive
+        cur.execute("UPDATE supervisors SET is_active = FALSE")
+        
+        # 2. Upsert new ones and mark as ACTIVE
         args = []
         for s in supervisors_list:
              # Hash the password
              hashed_pw = bcrypt.hashpw(s['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
              args.append((s['name'], s['email'], hashed_pw))
         
-        
         query = """
-        INSERT INTO supervisors (name, email, password) 
-        VALUES (%s, %s, %s) 
+        INSERT INTO supervisors (name, email, password, is_active) 
+        VALUES (%s, %s, %s, TRUE) 
         ON CONFLICT (email) 
-        DO UPDATE SET name = EXCLUDED.name;
+        DO UPDATE SET 
+            name = EXCLUDED.name, 
+            is_active = TRUE;
         """
         cur.executemany(query, args)
         conn.commit()
@@ -173,7 +179,7 @@ def get_all_supervisors():
 
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT name, email, role, unavailable_start, unavailable_end FROM supervisors ORDER BY name")
+        cur.execute("SELECT name, email, role, unavailable_start, unavailable_end FROM supervisors WHERE is_active = TRUE ORDER BY name")
         rows = cur.fetchall()
         cur.close()
         return rows # Returns list of dicts
