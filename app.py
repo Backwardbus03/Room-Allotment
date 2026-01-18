@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session, redirect, url_for, flash
+from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify
 import pandas as pd
 import scheduler
 import json
@@ -10,6 +10,7 @@ load_dotenv()
 from config import Config
 import db
 import extract_pdf
+import extract_csv
 import io
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -29,6 +30,34 @@ try:
     db.migrate_schema()
 except Exception as e:
     print(f"Startup DB Migration Warning: {e}")
+
+# Duplicate detection helper
+def remove_duplicate_sessions(sessions):
+    """
+    Remove duplicate sessions based on date, time, subject, and department.
+    Keep the first occurrence of each unique session.
+    
+    A session is considered duplicate if it has the same:
+    - date, start_time, end_time, subject (case-insensitive), department
+    """
+    seen = set()
+    unique_sessions = []
+    
+    for session in sessions:
+        # Create a unique key for this session
+        key = (
+            session.get('date', ''),
+            session.get('start_time', ''),
+            session.get('end_time', ''),
+            session.get('subject', '').strip().upper(),
+            session.get('department', '').strip().upper()
+        )
+        
+        if key not in seen:
+            seen.add(key)
+            unique_sessions.append(session)
+    
+    return unique_sessions
 
 # --- Helpers & Decorators ---
 
@@ -588,25 +617,100 @@ def configure():
         
         flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_db_data)} supervisors.", "success")
         
-        # Check for Timetable PDF and SAVE IT
-        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
-        pdf = request.files.get('timetable_pdf')
+        # Check for Timetable File(s) (PDF, CSV, or Excel) and SAVE THEM
+        timetable_files = request.files.getlist('timetable_pdf')  # Support multiple files
+        parser_selection = request.form.get('parser_type', 'gemini')  # Save parser choice
         
-        if pdf and pdf.filename:
-            pdf.save(pdf_path)
+        saved_files = []
+        if timetable_files and any(f.filename for f in timetable_files):
+            for idx, timetable_file in enumerate(timetable_files):
+                if not timetable_file.filename:
+                    continue
+                    
+                # Get original extension
+                ext = os.path.splitext(timetable_file.filename)[1].lower()
+                
+                # Validate extension
+                if ext not in ['.pdf', '.csv', '.xlsx', '.xls']:
+                    flash(f"Skipped '{timetable_file.filename}': Unsupported format {ext}", "warning")
+                    continue
+                
+                # Save with unique name (in case of multiple files)
+                if idx == 0:
+                    # First file uses standard name for backward compatibility
+                    timetable_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable{ext}')
+                else:
+                    # Additional files get numbered
+                    timetable_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable_{idx}{ext}')
+                
+                timetable_file.save(timetable_path)
+                saved_files.append(timetable_path)
+            
+            # Save parser preference and file list to session
+            session['parser_type'] = parser_selection
+            session['timetable_files'] = saved_files
+            
+            if saved_files:
+                flash(f"Uploaded {len(saved_files)} timetable file(s) successfully.", "success")
         else:
-            # If no new file uploaded (or key missing), ensure we don't keep the old one
-            if os.path.exists(pdf_path):
-                 os.remove(pdf_path)
+            # If no new files uploaded, clean up any existing temp files
+            for ext in ['.pdf', '.csv', '.xlsx', '.xls']:
+                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable{ext}')
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                # Also clean numbered files
+                for i in range(1, 10):
+                    temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable_{i}{ext}')
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
         
         # REDIRECT TO ROLE DEFINITION
         # Fetch fresh list from DB (to get current roles/defaults)
         full_supervisors = db.get_all_supervisors()
-        return render_template('define_roles.html', supervisors=full_supervisors)
+        # Also fetch available published exams for template reuse
+        available_exams = db.get_available_exams(published_only=True)
+        return render_template('define_roles.html', supervisors=full_supervisors, available_exams=available_exams)
                                
     except Exception as e:
         flash(f"An unexpected error occurred: {str(e)}", "danger")
         return redirect(url_for('admin_dashboard'))
+
+@app.route('/api/get_exam_template', methods=['GET'])
+@admin_required
+def get_exam_template():
+    """Fetch supervisor parameters from a previous exam for template reuse."""
+    exam_name = request.args.get('exam_name')
+    
+    if not exam_name:
+        return jsonify({'success': False, 'error': 'No exam name provided'})
+    
+    try:
+        snapshot = db.get_schedule_snapshot(exam_name)
+        
+        if not snapshot or 'supervisors' not in snapshot:
+            return jsonify({'success': False, 'error': 'No template data found'})
+        
+        # Return supervisor roles and unavailability
+        supervisors = snapshot['supervisors']
+        
+        # Filter to only include relevant fields
+        template_data = []
+        for sup in supervisors:
+            template_data.append({
+                'email': sup.get('email'),
+                'name': sup.get('name'),
+                'role': sup.get('role'),
+                'unavailable_start': sup.get('unavailable_start'),
+                'unavailable_end': sup.get('unavailable_end')
+            })
+        
+        return jsonify({
+            'success': True,
+            'supervisors': template_data
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/save_roles', methods=['POST'])
 @admin_required
@@ -643,28 +747,67 @@ def save_roles():
              db.update_supervisor_details(updates)
              flash(f"Updated roles for {len(updates)} supervisors.", "success")
              
-        # 3. Proceed to PDF Extraction (Original /configure logic continues here)
-        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
-        preloaded_sessions = []
+        # 3. Proceed to Timetable Extraction (PDF/CSV/Excel) - MULTIPLE FILES
+        # Find all uploaded timetable files
+        upload_folder = app.config['UPLOAD_FOLDER']
+        timetable_files = []
         
-        if os.path.exists(pdf_path):
-             try:
-                 # Try Gemini first if API Key exists
-                 if os.getenv('GEMINI_API_KEY'):
-                     flash("Attempting PDF extraction with Gemini...")
-                     preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
-                 
-                 # Fallback or if Gemini returns empty
-                 if not preloaded_sessions:
-                     if os.getenv('GEMINI_API_KEY'):
-                          flash("Gemini returned no data, falling back to local extractor.")
-                     preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
-                 
-                 flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
-             except Exception as ex:
-                 flash(f"Error extracting PDF: {str(ex)}", "warning")
+        # Check for files from session (if multiple were uploaded)
+        if 'timetable_files' in session and session['timetable_files']:
+            timetable_files = session['timetable_files']
         else:
-             flash("No PDF file found from previous step. Please start over if needed.", "warning")
+            # Fallback: auto-detect single file
+            for ext in ['.pdf', '.csv', '.xlsx', '.xls']:
+                possible_path = os.path.join(upload_folder, f'temp_timetable{ext}')
+                if os.path.exists(possible_path):
+                    timetable_files.append(possible_path)
+                    break
+        
+        all_sessions = []
+        
+        if timetable_files:
+            # Get parser selection from form (for PDFs)
+            parser_type = request.form.get('parser_type', 'gemini')
+            
+            for timetable_file in timetable_files:
+                file_ext = os.path.splitext(timetable_file)[1].lower()
+                filename = os.path.basename(timetable_file)
+                
+                try:
+                    if file_ext in ['.csv', '.xlsx', '.xls']:
+                        # CSV/Excel extraction
+                        flash(f"Extracting from {filename}...", "info")
+                        sessions = extract_csv.extract_sessions_from_csv(timetable_file)
+                        all_sessions.extend(sessions)
+                        
+                    elif file_ext == '.pdf':
+                        # PDF extraction with parser selection
+                        if parser_type == 'gemini' and os.getenv('GEMINI_API_KEY'):
+                            flash(f"Using Gemini AI parser for {filename}...", "info")
+                            sessions = extract_pdf.parse_schedule_with_gemini(timetable_file)
+                        else:
+                            flash(f"Using PDFPlumber for {filename}...", "info")
+                            sessions = extract_pdf.extract_sessions_from_pdf(timetable_file)
+                        all_sessions.extend(sessions)
+                    
+                except Exception as ex:
+                    flash(f"Error extracting {filename}: {str(ex)}", "warning")
+            
+            # DUPLICATE DETECTION AND REMOVAL
+            if all_sessions:
+                original_count = len(all_sessions)
+                all_sessions = remove_duplicate_sessions(all_sessions)
+                duplicate_count = original_count - len(all_sessions)
+                
+                if duplicate_count > 0:
+                    flash(f"Removed {duplicate_count} duplicate session(s).", "warning")
+                
+                flash(f"Total: {len(all_sessions)} unique session(s) extracted from {len(timetable_files)} file(s).", "success")
+            
+            preloaded_sessions = all_sessions
+        else:
+            flash("No timetable file found from previous step.", "warning")
+            preloaded_sessions = []
 
         # 4. Fetch Data for configure.html
         rooms = db.get_all_blocks()
@@ -890,6 +1033,11 @@ def _publish_schedule_emails(exam_name, schedule_data, supervisors_data):
     Helper to send emails for a published schedule.
     """
     try:
+        # Check if emails are disabled
+        if app.config.get('DISABLE_EMAILS', False):
+            print(f"--- EMAILS DISABLED - Skipping email notifications for {exam_name} ---")
+            return 0
+        
         print(f"--- STARTING PUBLISH EMAIL NOTIFICATIONS FOR {exam_name} ---")
         
         # 0. Generate Master PDF & Workload PDF for Admin

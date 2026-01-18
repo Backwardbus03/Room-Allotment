@@ -13,3 +13,6 @@ class Config:
     MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS') is not None or True
     MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or MAIL_USERNAME
     MAIL_ADMIN = os.environ.get('MAIL_ADMIN') or MAIL_DEFAULT_SENDER
+    
+    # Email Control - Set to True to disable all email sending
+    DISABLE_EMAILS = True  # Change to False to enable emails

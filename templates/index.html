@@ -123,11 +123,56 @@
                         </div>
 
                         <div class="mb-4">
-                            <label for="timetable_pdf" class="form-label fw-medium">Timetable PDF <span
+                            <label class="form-label fw-medium">Timetable File(s) <span
                                     class="text-muted fw-normal">(Optional)</span></label>
-                            <input class="form-control" type="file" id="timetable_pdf" name="timetable_pdf"
-                                accept=".pdf">
-                            <div class="form-text text-xs">Auto-extracts Date, Time, and Subject</div>
+
+
+                            <!-- File selection input -->
+                            <input class="form-control mb-2" type="file" id="timetable_file_picker"
+                                accept=".pdf,.csv,.xlsx,.xls" multiple>
+
+                            <!-- Selected files list -->
+                            <div id="selected_files_container" class="border rounded p-2 bg-light"
+                                style="min-height: 60px; display: none;">
+                                <small class="text-muted d-block mb-1">Selected Files:</small>
+                                <div id="selected_files_list"></div>
+                            </div>
+
+                            <!-- Hidden inputs to store files for form submission -->
+                            <div id="hidden_file_inputs"></div>
+
+                            <div class="form-text text-xs mt-1">Supported: PDF, CSV, Excel (.xlsx, .xls) - Use
+                                Shift/Ctrl to select multiple files at once</div>
+
+                            <!-- Parser Selection (Radio Buttons) -->
+                            <div id="parser_selection" class="mt-3">
+                                <label class="form-label fw-medium">Extraction Method:</label>
+                                <div class="d-flex gap-3 flex-wrap">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="parser_type"
+                                            id="parser_gemini" value="gemini" checked>
+                                        <label class="form-check-label" for="parser_gemini">
+                                            AI-Based (Gemini)
+                                        </label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="parser_type"
+                                            id="parser_pdfplumber" value="pdfplumber">
+                                        <label class="form-check-label" for="parser_pdfplumber">
+                                            Rule-Based (PDFPlumber)
+                                        </label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="parser_type" id="parser_csv"
+                                            value="csv">
+                                        <label class="form-check-label" for="parser_csv">
+                                            CSV/Excel Parser
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="form-text text-xs">Auto-detected based on file type. PDF uses selected
+                                    parser.</div>
+                            </div>
                         </div>
 
                         <button type="submit" class="btn btn-primary w-100 py-2">
@@ -233,7 +278,6 @@
     document.addEventListener('DOMContentLoaded', function () {
         const form = document.querySelector('form[action="/configure"]');
         const overlay = document.getElementById('loading-overlay');
-        const pdfInput = document.getElementById('timetable_pdf');
         const blocksInput = document.getElementById('blocks_file');
         const supsInput = document.getElementById('supervisors_file');
         const titleEl = overlay.querySelector('.loading-title');
@@ -252,6 +296,95 @@
             });
         }
     });
+
+    // File management for timetable files
+    let selectedFiles = [];
+
+    // Auto-add file when selected
+    document.addEventListener('DOMContentLoaded', function () {
+        const picker = document.getElementById('timetable_file_picker');
+        if (picker) {
+            picker.addEventListener('change', function () {
+                addTimetableFile();
+            });
+        }
+    });
+
+
+    function addTimetableFile() {
+        const picker = document.getElementById('timetable_file_picker');
+        const files = Array.from(picker.files); // Get all selected files
+
+        if (files.length === 0) {
+            return;
+        }
+
+        let addedCount = 0;
+        let duplicateCount = 0;
+
+        files.forEach(file => {
+            // Check if file already added
+            if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+                duplicateCount++;
+            } else {
+                // Add to array
+                selectedFiles.push(file);
+                addedCount++;
+            }
+        });
+
+        // Update UI
+        updateFilesList();
+
+        // Show feedback if duplicates were found
+        if (duplicateCount > 0) {
+            alert(`${duplicateCount} duplicate file(s) skipped. ${addedCount} new file(s) added.`);
+        }
+
+        // Clear picker
+        picker.value = '';
+    }
+
+    function removeFile(index) {
+        selectedFiles.splice(index, 1);
+        updateFilesList();
+    }
+
+    function updateFilesList() {
+        const container = document.getElementById('selected_files_container');
+        const listEl = document.getElementById('selected_files_list');
+        const hiddenInputsEl = document.getElementById('hidden_file_inputs');
+
+        if (selectedFiles.length === 0) {
+            container.style.display = 'none';
+            hiddenInputsEl.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+
+        // Update visible list
+        listEl.innerHTML = selectedFiles.map((file, index) => `
+            <div class="d-flex justify-content-between align-items-center py-1 px-2 mb-1 bg-white rounded border">
+                <span class="text-truncate" style="max-width: 80%;">
+                    <i class="bi bi-file-earmark"></i> ${file.name}
+                    <small class="text-muted">(${(file.size / 1024).toFixed(1)} KB)</small>
+                </span>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeFile(${index})">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        `).join('');
+
+        // Update hidden inputs using DataTransfer
+        const dataTransfer = new DataTransfer();
+        selectedFiles.forEach(file => {
+            dataTransfer.items.add(file);
+        });
+
+        hiddenInputsEl.innerHTML = '<input type="file" name="timetable_pdf" style="display:none;" id="hidden_timetable_files" multiple>';
+        document.getElementById('hidden_timetable_files').files = dataTransfer.files;
+    }
 
     // Pagination for exam schedules table
     document.addEventListener('DOMContentLoaded', function () {
