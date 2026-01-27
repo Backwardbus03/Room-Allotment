@@ -2,6 +2,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import bcrypt
 
 load_dotenv()
 
@@ -26,10 +27,30 @@ def get_connection():
         print(f"Failed to connect to DB: {e}")
         return None
 
+
+def migrate_schema():
+    """Ensures DB schema is up to date."""
+    conn = get_connection()
+    if not conn: return
+    try:
+        cur = conn.cursor()
+        # Add is_published column if not exists
+        cur.execute("""
+            ALTER TABLE schedules 
+            ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE;
+        """)
+        conn.commit()
+        cur.close()
+        print("Schema migration checked/applied.")
+    except Exception as e:
+        print(f"Schema migration error: {e}")
+    finally:
+        conn.close()
+
 def upsert_supervisors(supervisors_list):
     """
     Upserts a list of supervisors. 
-    supervisors_list: [{'name': '...', 'password': '...'}, ...]
+    supervisors_list: [{'name': '...', 'email': '...', 'password': '...'}, ...]
     """
     conn = get_connection()
     if not conn: return
@@ -38,15 +59,26 @@ def upsert_supervisors(supervisors_list):
         cur = conn.cursor()
         
         # We use executemany for bulk upsert
-        # ON CONFLICT(name) DO UPDATE password
+        # ON CONFLICT(email) DO UPDATE password, name
         
-        args = [(s['name'], s['password']) for s in supervisors_list]
+        # 1. MARK ALL AS INACTIVE FIRST
+        # This ensures that anyone NOT in the new list becomes inactive
+        cur.execute("UPDATE supervisors SET is_active = FALSE")
+        
+        # 2. Upsert new ones and mark as ACTIVE
+        args = []
+        for s in supervisors_list:
+             # Hash the password
+             hashed_pw = bcrypt.hashpw(s['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+             args.append((s['name'], s['email'], hashed_pw))
         
         query = """
-        INSERT INTO supervisors (name, password) 
-        VALUES (%s, %s) 
-        ON CONFLICT (name) 
-        DO UPDATE SET password = EXCLUDED.password;
+        INSERT INTO supervisors (name, email, password, is_active) 
+        VALUES (%s, %s, %s, TRUE) 
+        ON CONFLICT (email) 
+        DO UPDATE SET 
+            name = EXCLUDED.name, 
+            is_active = TRUE;
         """
         cur.executemany(query, args)
         conn.commit()
@@ -56,7 +88,7 @@ def upsert_supervisors(supervisors_list):
     finally:
         conn.close()
 
-def create_supervisor(name, password):
+def create_supervisor(name, email, password):
     """
     Creates a new supervisor. 
     Returns (True, "Success") or (False, ErrorMessage).
@@ -66,14 +98,15 @@ def create_supervisor(name, password):
 
     try:
         cur = conn.cursor()
-        query = "INSERT INTO supervisors (name, password) VALUES (%s, %s)"
-        cur.execute(query, (name, password))
+        hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        query = "INSERT INTO supervisors (name, email, password) VALUES (%s, %s, %s)"
+        cur.execute(query, (name, email, hashed_pw))
         conn.commit()
         cur.close()
         return True, "Registration successful"
     except psycopg2.IntegrityError:
-        conn.rollback() # duplicate name likely
-        return False, "Supervisor name already exists"
+        conn.rollback() # duplicate email likely
+        return False, "Supervisor email already exists"
     except Exception as e:
         conn.rollback()
         print(f"Error creating supervisor: {e}")
@@ -81,39 +114,48 @@ def create_supervisor(name, password):
     finally:
         conn.close()
 
-def verify_supervisor(name, password):
-    """Verifies supervisor credentials. Returns True if valid."""
+def verify_supervisor(email, password):
+    """Verifies supervisor credentials. Returns (True, name) if valid, else (False, None)."""
     conn = get_connection()
-    if not conn: return False
+    if not conn: return False, None
 
     try:
         cur = conn.cursor()
-        cur.execute("SELECT password FROM supervisors WHERE name = %s", (name,))
+        cur.execute("SELECT password, name FROM supervisors WHERE email = %s", (email,))
         row = cur.fetchone()
         cur.close()
         
         if row:
-            # In a real app, hash this!
-            # Storing plain text as requested/implied by "excel upload" simplicity
-            db_pass = row[0]
-            if db_pass == password:
-                return True
+            stored_hash = row[0]
+            name = row[1]
+            # Verify using bcrypt
+            # Note: stored_hash should be a string from DB, we encode it to bytes for bcrypt
+            try:
+                if bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8')):
+                    return True, name
+            except ValueError:
+                # Fallback for plain text (during migration transition)
+                if stored_hash == password:
+                    return True, name
                 
-        return False
+        return False, None
     except Exception as e:
         print(f"Error verifying supervisor: {e}")
-        return False
+        return False, None
     finally:
         conn.close()
 
 def update_supervisor_password(name, new_password):
+    # 'name' arg here is actually the email in the new context, will rename internally to email
+    email = name
     """Updates supervisor password. Returns True if successful."""
     conn = get_connection()
     if not conn: return False
 
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE supervisors SET password = %s WHERE name = %s", (new_password, name))
+        hashed_pw = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        cur.execute("UPDATE supervisors SET password = %s WHERE email = %s", (hashed_pw, name))
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()
@@ -124,17 +166,43 @@ def update_supervisor_password(name, new_password):
     finally:
         conn.close()
 
+def update_supervisor_details(updates):
+    """
+    Updates role and unavailability for multiple supervisors.
+    updates: list of {'email': ..., 'role': ..., 'start': ..., 'end': ...}
+    """
+    conn = get_connection()
+    if not conn: return False
+
+    try:
+        cur = conn.cursor()
+        query = """
+        UPDATE supervisors 
+        SET role = %s, unavailable_start = %s, unavailable_end = %s 
+        WHERE email = %s
+        """
+        args = [(u['role'], u['start'], u['end'], u['email']) for u in updates]
+        cur.executemany(query, args)
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"Error updating supervisor details: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_supervisors():
-    """Returns a list of supervisor names."""
+    """Returns a list of supervisor dictionaries with all details."""
     conn = get_connection()
     if not conn: return []
 
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM supervisors")
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT name, email, role, unavailable_start, unavailable_end FROM supervisors WHERE is_active = TRUE ORDER BY name")
         rows = cur.fetchall()
         cur.close()
-        return [row[0] for row in rows]
+        return rows # Returns list of dicts
     except Exception as e:
         print(f"Error fetching supervisors: {e}")
         return []
@@ -166,7 +234,27 @@ def upsert_blocks(rooms_list):
     finally:
         conn.close()
 
-def save_schedule(exam_name, input_snapshot, schedule_result):
+def delete_all_blocks():
+    """
+    Deletes all rows from the blocks table.
+    Used to clear old rooms before importing a new Excel file.
+    """
+    conn = get_connection()
+    if not conn: return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM blocks;")
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"Error deleting blocks: {e}")
+        return False
+    finally:
+        conn.close()
+
+def save_schedule(exam_name, input_snapshot, schedule_result, published=False):
     """
     Saves the new schedule as a snapshot.
     """
@@ -175,22 +263,29 @@ def save_schedule(exam_name, input_snapshot, schedule_result):
     
     try:
         cur = conn.cursor()
-        
-        # Insert or Update (Assuming we might want to update if same exam name? 
-        # For now let's just Insert, or assume exam names are unique-ish enough or we allow duplicates)
-        # Using JSONB for postgres
         import json
         
-        query = """
-        INSERT INTO schedules (exam_name, input_snapshot, schedule_result)
-        VALUES (%s, %s, %s)
-        """
+        # Check if exists to update or insert (Upsert)
+        # Using simple check-then-insert/update logic for compatibility
+        cur.execute("SELECT id FROM schedules WHERE exam_name = %s", (exam_name,))
+        row = cur.fetchone()
         
-        cur.execute(query, (
-            exam_name, 
-            json.dumps(input_snapshot), 
-            json.dumps(schedule_result)
-        ))
+        input_json = json.dumps(input_snapshot)
+        result_json = json.dumps(schedule_result)
+        
+        if row:
+            # Update existing
+            cur.execute("""
+                UPDATE schedules 
+                SET input_snapshot = %s, schedule_result = %s, is_published = %s, created_at = NOW()
+                WHERE exam_name = %s
+            """, (input_json, result_json, published, exam_name))
+        else:
+            # Insert new
+            cur.execute("""
+                INSERT INTO schedules (exam_name, input_snapshot, schedule_result, is_published)
+                VALUES (%s, %s, %s, %s)
+            """, (exam_name, input_json, result_json, published))
         
         conn.commit()
         cur.close()
@@ -199,25 +294,62 @@ def save_schedule(exam_name, input_snapshot, schedule_result):
     finally:
         conn.close()
 
-def get_available_exams():
+def publish_schedule_db(exam_name):
+    """Sets is_published to True for an exam."""
+    conn = get_connection()
+    if not conn: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE schedules SET is_published = TRUE WHERE exam_name = %s", (exam_name,))
+        updated = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        return updated
+    except Exception as e:
+        print(f"Error publishing schedule DB: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_available_exams(published_only=False):
     """Returns list of distinct exam names available in the db."""
     conn = get_connection()
     if not conn: return []
     
     try:
         cur = conn.cursor()
-        query = """
-        SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues
-        FROM schedules s
-        LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
-        GROUP BY s.exam_name, s.created_at
-        ORDER BY s.created_at DESC
-        """
+        
+        if published_only:
+             query = """
+            SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues
+            FROM schedules s
+            LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
+            WHERE s.is_published = TRUE
+            GROUP BY s.exam_name, s.created_at
+            ORDER BY s.created_at DESC
+            """
+        else:
+            query = """
+            SELECT s.exam_name, s.created_at, COUNT(i.id) as open_issues, s.is_published
+            FROM schedules s
+            LEFT JOIN supervisor_issues i ON s.exam_name = i.exam_name AND i.status = 'OPEN'
+            GROUP BY s.exam_name, s.created_at, s.is_published
+            ORDER BY s.created_at DESC
+            """
+            
         cur.execute(query)
         rows = cur.fetchall()
         cur.close()
-        # Return dict with issue count
-        return [{'name': r[0], 'date': r[1], 'issue_count': r[2]} for r in rows]
+        
+        results = []
+        for r in rows:
+            item = {'name': r[0], 'date': r[1], 'issue_count': r[2]}
+            if not published_only:
+                 # Add status for admin
+                 item['is_published'] = r[3] if len(r) > 3 else True
+            results.append(item)
+            
+        return results
     except Exception as e:
         print(f"Error fetching exams: {e}")
         return []
@@ -279,18 +411,62 @@ def get_full_schedule(exam_name):
     finally:
         conn.close()
 
-def report_issue(exam_name, supervisor_name, date, time, block, reason):
-    """Reports a supervisor unavailability issue."""
+def get_schedule_snapshot(exam_name):
+    """
+    Fetch the input_snapshot for a specific exam.
+    Used to retrieve persistent metadata like allocation errors.
+    """
+    conn = get_connection()
+    if not conn: return {}
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT input_snapshot FROM schedules WHERE exam_name = %s", (exam_name,))
+        row = cur.fetchone()
+        cur.close()
+        
+        if not row or not row['input_snapshot']: return {}
+        return row['input_snapshot'] 
+        
+    except Exception as e:
+        print(f"Error fetching snapshot: {e}")
+        return {}
+    finally:
+        conn.close()
+
+def report_issue(exam_name, supervisor_name, date, time, block, reason, candidate_data=None):
+    """
+    Reports a supervisor unavailability issue.
+    candidate_data: dict with candidate_supervisor, candidate_date, candidate_time, candidate_block, swap_type
+    """
     conn = get_connection()
     if not conn: return False, "DB Connection Failed"
     
     try:
         cur = conn.cursor()
+        
+        # Prepare optional fields
+        c_sup = None
+        c_date = None
+        c_time = None
+        c_block = None
+        s_type = '1-way (Relief)'
+        
+        if candidate_data:
+            c_sup = candidate_data.get('candidate_supervisor')
+            c_date = candidate_data.get('candidate_date')
+            c_time = candidate_data.get('candidate_time')
+            c_block = candidate_data.get('candidate_block')
+            s_type = candidate_data.get('swap_type', '1-way (Relief)')
+            
         query = """
-        INSERT INTO supervisor_issues (exam_name, supervisor_name, date, time, block, reason)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO supervisor_issues 
+        (exam_name, supervisor_name, date, time, block, reason, 
+         candidate_supervisor, candidate_date, candidate_time, candidate_block, swap_type)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        cur.execute(query, (exam_name, supervisor_name, date, time, block, reason))
+        cur.execute(query, (exam_name, supervisor_name, date, time, block, reason,
+                            c_sup, c_date, c_time, c_block, s_type))
         conn.commit()
         cur.close()
         return True, "Issue reported successfully."
@@ -322,20 +498,63 @@ def get_open_issues(exam_name):
     finally:
         conn.close()
 
-def resolve_issue(issue_id):
-    """Marks an issue as resolved."""
+def get_supervisor_issues_history(exam_name, supervisor_name):
+    """Fetches all issues reported by a supervisor for a specific exam."""
+    conn = get_connection()
+    if not conn: return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        query = """
+        SELECT * FROM supervisor_issues 
+        WHERE exam_name = %s AND supervisor_name = %s
+        ORDER BY created_at DESC
+        """
+        cur.execute(query, (exam_name, supervisor_name))
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"Error fetching supervisor history: {e}")
+        return []
+    finally:
+        conn.close()
+
+def resolve_issue(issue_id, status='RESOLVED', rejection_reason=None):
+    """Marks an issue as resolved or rejected."""
     conn = get_connection()
     if not conn: return False
     
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE supervisor_issues SET status = 'RESOLVED' WHERE id = %s", (issue_id,))
+        if status == 'REJECTED':
+             cur.execute("UPDATE supervisor_issues SET status = %s, rejection_reason = %s WHERE id = %s", (status, rejection_reason, issue_id))
+        else:
+             cur.execute("UPDATE supervisor_issues SET status = %s WHERE id = %s", (status, issue_id))
+        
         conn.commit()
         cur.close()
         return True
     except Exception as e:
         print(f"Error resolving issue: {e}")
         return False
+    finally:
+        conn.close()
+
+def get_all_blocks():
+    """Returns a list of block dicts {'name': ..., 'capacity': ...}."""
+    conn = get_connection()
+    if not conn: return []
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT name, capacity FROM blocks ORDER BY name")
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"Error fetching blocks: {e}")
+        return []
     finally:
         conn.close()
 

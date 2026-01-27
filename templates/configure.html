@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}Configure Sessions - Exam Scheduler{% endblock %}
+{% block title %}Configure Schedule - Exam Scheduler{% endblock %}
+
+{% block head_extra %}
+<style>
+    h3.text-primary,
+    h5.text-primary {
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -29,7 +41,14 @@
                 </div>
                 <div class="col-md-2">
                     <label for="input-department" class="form-label fw-bold small text-muted">Department</label>
-                    <input type="text" id="input-department" class="form-control" placeholder="e.g. CSE">
+                    <select id="input-department" class="form-select">
+                        <option value="">-- Select --</option>
+                        <option value="CMPN">CMPN</option>
+                        <option value="INFT">INFT</option>
+                        <option value="EXCS">EXCS</option>
+                        <option value="EXTC">EXTC</option>
+                        <option value="BIOM">BIOM</option>
+                    </select>
                 </div>
                 <div class="col-md-2">
                     <label for="input-subject" class="form-label fw-bold small text-muted">Subject</label>
@@ -61,18 +80,19 @@
                     <thead class="table-light">
                         <tr>
                             <th class="ps-4">#</th>
-                            <th>Date</th>
-                            <th>Time</th>
+                            <th style="white-space: nowrap;">Date</th>
+                            <th style="white-space: nowrap;">Time</th>
                             <th>Department</th>
                             <th>Subject</th>
-                            <th>Students</th>
-                            <th style="width: 35%;">Unavailable Supervisors (for time slot)</th>
-                            <th class="text-end pe-4">Action</th>
+                            <th style="width: 100px;">Students</th>
+                            <th style="width: 25%;">Unavailable Supervisors</th>
+                            <th style="width: 60px;"></th>
+                            <th class="text-end pe-4" style="width: 80px;">Action</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr id="empty-row">
-                            <td colspan="7" class="text-center py-5 text-muted">
+                            <td colspan="8" class="text-center py-5 text-muted">
                                 <div class="mb-2"><i class="bi bi-list-task fs-3"></i></div>
                             <td colspan="8" class="text-center py-5 text-muted">
                                 <div class="mb-2"><i class="bi bi-list-task fs-3"></i></div>
@@ -90,13 +110,13 @@
         <input type="hidden" name="rooms_json" value="{{ rooms_json }}">
         <input type="hidden" name="supervisors_json" value="{{ supervisors_json }}">
 
-        <div class="alert alert-light border shadow-sm d-flex align-items-center p-4">
+        <div class="alert alert-light border shadow-sm d-flex align-items-end p-4">
             <div class="flex-grow-1 me-4">
-                <label for="exam_name" class="form-label fw-bold fs-5 mb-1">Exam Name / Title</label>
+                <label for="exam_name" class="form-label fw-bold fs-5 mb-2">Exam Name / Title</label>
                 <input type="text" id="exam_name" name="exam_name" required placeholder="e.g. End Semester Exam 2024"
                     class="form-control form-control-lg">
             </div>
-            <div>
+            <div class="pb-1">
                 <button type="submit" class="btn btn-primary btn-lg shadow-sm" onclick="return validateForm()">
                     <i class="bi bi-lightning-charge-fill me-2"></i>Generate Schedule
                 </button>
@@ -112,6 +132,7 @@
 <script>
     const allSupervisors = {{ supervisors_json | safe }};
     const preloadedSessions = {{ preloaded_sessions | safe }};
+    const supervisorConstraints = {{ supervisor_constraints | safe }} || {};
 
     let sessionCounter = 0;
     let rowCount = 0;
@@ -155,8 +176,30 @@
         div.appendChild(createHidden(`department_${currentId}`, department));
         div.appendChild(createHidden(`total_students_${currentId}`, students));
 
-        // Get unavailable supervisors for this time slot
-        const unavailable = timeSlotUnavailability[timeSlotKey] || [];
+        // Check global constraints for this date
+        const autoUnavailable = [];
+        if (date && supervisorConstraints) {
+            for (const [name, range] of Object.entries(supervisorConstraints)) {
+                if (date >= range.start && date <= range.end) {
+                    autoUnavailable.push(name);
+                }
+            }
+        }
+
+        // Get unavailable supervisors for this time slot (or init with auto)
+        // If this is a new slot (not in timeSlotUnavailability), use autoUnavailable
+        let unavailable = timeSlotUnavailability[timeSlotKey];
+
+        if (!unavailable) {
+            unavailable = autoUnavailable;
+            timeSlotUnavailability[timeSlotKey] = unavailable;
+        } else {
+            // If exists, ensure auto-unavailable are still there (optional, but good for consistency)
+            // But usually we just take what's there. 
+            // If we want to enforcing "always unavailable", we might union them.
+            // For now, let's respect the slot if it exists, assuming it was initialized correctly or user modified.
+        }
+
         unavailable.forEach(name => {
             div.appendChild(createHidden(`unavailable_${currentId}`, name));
         });
@@ -176,6 +219,8 @@
         const isFirstInSlot = !document.querySelector(`tr[data-time-slot-key="${timeSlotKey}"]`);
 
         let unavailCell = '';
+        let refCell = '';
+
         if (isFirstInSlot) {
             const optionsHtml = allSupervisors.map(name => {
                 const selected = unavailable.includes(name) ? 'selected' : '';
@@ -190,22 +235,40 @@
                     </select>
                 </td>
             `;
+            refCell = '<td></td>'; // Empty for editable entries
         } else {
-            // For subsequent rows in same slot, show message and no dropdown
+            // For subsequent rows in same slot, show message and reference in separate column
             const unavailText = unavailable.length > 0 ? unavailable.join(', ') : 'None';
-            unavailCell = `<td class="align-middle text-muted small fst-italic">(Same as above: ${unavailText})</td>`;
+            unavailCell = `<td class="align-middle text-muted fst-italic">${unavailText}</td>`;
+
+            // Find the first row with this time slot to get its row number
+            const firstRow = document.querySelector(`tr[data-time-slot-key="${timeSlotKey}"]`);
+            const firstRowNum = firstRow ? firstRow.querySelector('td:first-child').textContent : '?';
+            refCell = `<td class="align-middle text-center">
+                <span class="badge bg-info text-dark" style="font-size: 0.75rem;" title="Same as row #${firstRowNum}">${firstRowNum}</span>
+            </td>`;
         }
 
         tr.innerHTML = `
             <td class="align-middle ps-4">${rowCount}</td>
-            <td class="align-middle">${date}</td>
-            <td class="align-middle">${startTime} - ${endTime}</td>
-            <td class="align-middle fw-medium text-primary shadow-sm small border rounded px-2 bg-light">${department || '-'}</td>
+            <td class="align-middle" style="white-space: nowrap;">${date}</td>
+            <td class="align-middle" style="white-space: nowrap;">${startTime} - ${endTime}</td>
+            <td class="align-middle">
+                <select class="form-select form-select-sm" style="width: 100px;" onchange="updateDepartment(${currentId}, this.value)">
+                    <option value="" ${!department ? 'selected' : ''}>-</option>
+                    <option value="CMPN" ${department === 'CMPN' ? 'selected' : ''}>CMPN</option>
+                    <option value="INFT" ${department === 'INFT' ? 'selected' : ''}>INFT</option>
+                    <option value="EXCS" ${department === 'EXCS' ? 'selected' : ''}>EXCS</option>
+                    <option value="EXTC" ${department === 'EXTC' ? 'selected' : ''}>EXTC</option>
+                    <option value="BIOM" ${department === 'BIOM' ? 'selected' : ''}>BIOM</option>
+                </select>
+            </td>
             <td class="align-middle fw-medium">${subject}</td>
             <td class="align-middle">
                 <input type="number" class="form-control form-control-sm" value="${students}" min="1" style="width: 80px" onchange="updateStudents(${currentId}, this.value)">
             </td>
             ${unavailCell}
+            ${refCell}
             <td class="align-middle text-end pe-4">
                 <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeSession(${currentId})">
                     <i class="bi bi-trash"></i>
@@ -224,7 +287,8 @@
                 valueField: 'value',
                 labelField: 'text',
                 searchField: 'text',
-                placeholder: 'Select unavailable supervisors for this time slot...',
+                placeholder: 'Select unavailable supervisors',
+                hidePlaceholder: true,  // Hide placeholder when items are selected
                 onChange: function (values) {
                     updateTimeSlotUnavailability(timeSlotKey, values);
                 }
@@ -264,9 +328,9 @@
         if (rows.length > 1) {
             const unavailText = values && values.length > 0 ? values.join(', ') : 'None';
             for (let i = 1; i < rows.length; i++) {
-                const td = rows[i].querySelector('td:nth-child(6)'); // 6th column is unavailability
+                const td = rows[i].querySelector('td:nth-child(7)'); // 7th column is unavailability (after #, Date, Time, Dept, Subject, Students)
                 if (td) {
-                    td.innerHTML = `<span class="text-muted small fst-italic">(Same as above: ${unavailText})</span>`;
+                    td.innerHTML = `<span class="text-muted fst-italic"> ${unavailText} </span>`;
                 }
             }
         }
@@ -276,6 +340,14 @@
         const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
         if (hiddenDiv) {
             const input = hiddenDiv.querySelector(`input[name="total_students_${sid}"]`);
+            if (input) input.value = val;
+        }
+    }
+
+    function updateDepartment(sid, val) {
+        const hiddenDiv = document.getElementById(`hidden-session-${sid}`);
+        if (hiddenDiv) {
+            const input = hiddenDiv.querySelector(`input[name="department_${sid}"]`);
             if (input) input.value = val;
         }
     }

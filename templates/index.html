@@ -2,13 +2,105 @@
 
 {% block title %}Admin Dashboard - Exam Scheduler{% endblock %}
 
+{% block head_extra %}
+<style>
+    h5.text-primary {
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    /* Premium Loading Overlay */
+    #loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(255, 255, 255, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        z-index: 9999;
+        display: none;
+        opacity: 0;
+        transition: opacity 0.3s ease-in-out;
+        justify-content: center;
+        align-items: center;
+    }
+
+    #loading-overlay.active {
+        display: flex;
+        opacity: 1;
+    }
+
+    .loading-card {
+        background: rgba(255, 255, 255, 0.9);
+        padding: 3rem;
+        border-radius: 1.5rem;
+        box-shadow:
+            0 20px 25px -5px rgba(0, 0, 0, 0.1),
+            0 8px 10px -6px rgba(0, 0, 0, 0.1),
+            0 0 0 1px rgba(0, 0, 0, 0.05);
+        /* Subtle border */
+        text-align: center;
+        max-width: 400px;
+        width: 90%;
+        transform: translateY(20px);
+        transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    #loading-overlay.active .loading-card {
+        transform: translateY(0);
+    }
+
+    /* Modern Spinner */
+    .spinner-premium {
+        width: 60px;
+        height: 60px;
+        margin: 0 auto 1.5rem;
+        border-radius: 50%;
+        position: relative;
+        background: conic-gradient(from 0deg, transparent 0%, var(--primary-color) 100%);
+        animation: spin 1s linear infinite;
+        /* Mask to create ring */
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #fff 0);
+        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #fff 0);
+    }
+
+    @keyframes spin {
+        from {
+            transform: rotate(0deg);
+        }
+
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
+    .loading-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text-main);
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.02em;
+    }
+
+    .loading-subtitle {
+        font-size: 0.875rem;
+        color: var(--text-muted);
+        line-height: 1.5;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container">
-    <div class="row g-4">
+    <div class="row g-3">
         <!-- New Schedule Card -->
         <div class="col-md-5">
             <div class="card h-100 border-0 shadow-sm">
-                <div class="card-header bg-white border-bottom-0 pb-0 pt-4">
+                <div class="card-header">
                     <h5 class="card-title fw-bold text-primary mb-0">Create New Schedule</h5>
                 </div>
                 <div class="card-body">
@@ -31,11 +123,56 @@
                         </div>
 
                         <div class="mb-4">
-                            <label for="timetable_pdf" class="form-label fw-medium">Timetable PDF <span
+                            <label class="form-label fw-medium">Timetable File(s) <span
                                     class="text-muted fw-normal">(Optional)</span></label>
-                            <input class="form-control" type="file" id="timetable_pdf" name="timetable_pdf"
-                                accept=".pdf">
-                            <div class="form-text text-xs">Auto-extracts Date, Time, and Subject</div>
+
+
+                            <!-- File selection input -->
+                            <input class="form-control mb-2" type="file" id="timetable_file_picker"
+                                accept=".pdf,.csv,.xlsx,.xls" multiple>
+
+                            <!-- Selected files list -->
+                            <div id="selected_files_container" class="border rounded p-2 bg-light"
+                                style="min-height: 60px; display: none;">
+                                <small class="text-muted d-block mb-1">Selected Files:</small>
+                                <div id="selected_files_list"></div>
+                            </div>
+
+                            <!-- Hidden inputs to store files for form submission -->
+                            <div id="hidden_file_inputs"></div>
+
+                            <div class="form-text text-xs mt-1">Supported: PDF, CSV, Excel (.xlsx, .xls) - Use
+                                Shift/Ctrl to select multiple files at once</div>
+
+                            <!-- Parser Selection (Radio Buttons) -->
+                            <div id="parser_selection" class="mt-3">
+                                <label class="form-label fw-medium">Extraction Method:</label>
+                                <div class="d-flex gap-3 flex-wrap">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="parser_type"
+                                            id="parser_gemini" value="gemini" checked>
+                                        <label class="form-check-label" for="parser_gemini">
+                                            AI-Based (Gemini)
+                                        </label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="parser_type"
+                                            id="parser_pdfplumber" value="pdfplumber">
+                                        <label class="form-check-label" for="parser_pdfplumber">
+                                            Rule-Based (PDFPlumber)
+                                        </label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="parser_type" id="parser_csv"
+                                            value="csv">
+                                        <label class="form-check-label" for="parser_csv">
+                                            CSV/Excel Parser
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="form-text text-xs">Auto-detected based on file type. PDF uses selected
+                                    parser.</div>
+                            </div>
                         </div>
 
                         <button type="submit" class="btn btn-primary w-100 py-2">
@@ -49,13 +186,13 @@
         <!-- Existing Schedules Card -->
         <div class="col-md-7">
             <div class="card h-100 border-0 shadow-sm">
-                <div class="card-header bg-white border-bottom-0 pb-0 pt-4">
+                <div class="card-header">
                     <h5 class="card-title fw-bold text-secondary mb-0">Generated Schedules</h5>
                 </div>
                 <div class="card-body">
                     {% if exams %}
                     <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0">
+                        <table class="table table-hover align-middle mb-0" id="exams-table">
                             <thead class="table-light small text-uppercase text-muted">
                                 <tr>
                                     <th class="border-0 ps-3">Exam Name</th>
@@ -63,9 +200,9 @@
                                     <th class="border-0 text-end pe-3">Action</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody id="exams-tbody">
                                 {% for exam in exams %}
-                                <tr>
+                                <tr class="exam-row">
                                     <td class="ps-3 fw-medium text-dark">
                                         {{ exam.name }}
                                         {% if exam.issue_count > 0 %}
@@ -74,6 +211,13 @@
                                             {{ exam.issue_count }} <i class="bi bi-exclamation-circle-fill small"></i>
                                         </span>
                                         {% endif %}
+                                        {% if query_params or not exam.is_published %}
+                                        {% if not exam.is_published %}
+                                        <span class="badge bg-secondary rounded-pill ms-2 text-uppercase"
+                                            style="font-size: 0.7em;">Draft</span>
+                                        {% endif %}
+                                        {% endif %}
+
                                     </td>
                                     <td class="small text-muted">{{ exam.date.strftime('%Y-%m-%d %H:%M') if exam.date
                                         else 'N/A' }}</td>
@@ -86,6 +230,15 @@
                             </tbody>
                         </table>
                     </div>
+
+                    <!-- Pagination Controls -->
+                    <div class="d-flex justify-content-between align-items-center mt-3 px-3" id="pagination-container">
+                        <div class="text-muted small" id="pagination-info"></div>
+                        <nav aria-label="Exam schedules pagination">
+                            <ul class="pagination pagination-sm mb-0" id="pagination-controls"></ul>
+                        </nav>
+                    </div>
+
                     {% else %}
                     <div class="text-center py-5">
                         <div class="mb-3 text-muted">
@@ -106,4 +259,232 @@
         </div>
     </div>
 </div>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay">
+    <div class="loading-card">
+        <div class="spinner-premium"></div>
+        <div class="loading-title">Processing...</div>
+        <div class="loading-subtitle">
+            Please wait while we upload your files.
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Handle Form Submission
+    document.addEventListener('DOMContentLoaded', function () {
+        const form = document.querySelector('form[action="/configure"]');
+        const overlay = document.getElementById('loading-overlay');
+        const blocksInput = document.getElementById('blocks_file');
+        const supsInput = document.getElementById('supervisors_file');
+        const titleEl = overlay.querySelector('.loading-title');
+        const subEl = overlay.querySelector('.loading-subtitle');
+
+        if (form) {
+            form.addEventListener('submit', function (e) {
+                // Basic check
+                if (!blocksInput.files.length || !supsInput.files.length) {
+                    return;
+                }
+
+                titleEl.textContent = "Processing Files";
+                subEl.textContent = "Uploading your room and supervisor configurations...";
+                overlay.classList.add('active');
+            });
+        }
+    });
+
+    // File management for timetable files
+    let selectedFiles = [];
+
+    // Auto-add file when selected
+    document.addEventListener('DOMContentLoaded', function () {
+        const picker = document.getElementById('timetable_file_picker');
+        if (picker) {
+            picker.addEventListener('change', function () {
+                addTimetableFile();
+            });
+        }
+    });
+
+
+    function addTimetableFile() {
+        const picker = document.getElementById('timetable_file_picker');
+        const files = Array.from(picker.files); // Get all selected files
+
+        if (files.length === 0) {
+            return;
+        }
+
+        let addedCount = 0;
+        let duplicateCount = 0;
+
+        files.forEach(file => {
+            // Check if file already added
+            if (selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+                duplicateCount++;
+            } else {
+                // Add to array
+                selectedFiles.push(file);
+                addedCount++;
+            }
+        });
+
+        // Update UI
+        updateFilesList();
+
+        // Show feedback if duplicates were found
+        if (duplicateCount > 0) {
+            alert(`${duplicateCount} duplicate file(s) skipped. ${addedCount} new file(s) added.`);
+        }
+
+        // Clear picker
+        picker.value = '';
+    }
+
+    function removeFile(index) {
+        selectedFiles.splice(index, 1);
+        updateFilesList();
+    }
+
+    function updateFilesList() {
+        const container = document.getElementById('selected_files_container');
+        const listEl = document.getElementById('selected_files_list');
+        const hiddenInputsEl = document.getElementById('hidden_file_inputs');
+
+        if (selectedFiles.length === 0) {
+            container.style.display = 'none';
+            hiddenInputsEl.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+
+        // Update visible list
+        listEl.innerHTML = selectedFiles.map((file, index) => `
+            <div class="d-flex justify-content-between align-items-center py-1 px-2 mb-1 bg-white rounded border">
+                <span class="text-truncate" style="max-width: 80%;">
+                    <i class="bi bi-file-earmark"></i> ${file.name}
+                    <small class="text-muted">(${(file.size / 1024).toFixed(1)} KB)</small>
+                </span>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeFile(${index})">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        `).join('');
+
+        // Update hidden inputs using DataTransfer
+        const dataTransfer = new DataTransfer();
+        selectedFiles.forEach(file => {
+            dataTransfer.items.add(file);
+        });
+
+        hiddenInputsEl.innerHTML = '<input type="file" name="timetable_pdf" style="display:none;" id="hidden_timetable_files" multiple>';
+        document.getElementById('hidden_timetable_files').files = dataTransfer.files;
+    }
+
+    // Pagination for exam schedules table
+    document.addEventListener('DOMContentLoaded', function () {
+        const rowsPerPage = 8; // Show 8 entries per page to avoid scrolling
+        const rows = document.querySelectorAll('.exam-row');
+        const paginationContainer = document.getElementById('pagination-container');
+        const paginationInfo = document.getElementById('pagination-info');
+        const paginationControls = document.getElementById('pagination-controls');
+
+        if (rows.length === 0) {
+            return; // No rows to paginate
+        }
+
+        const totalPages = Math.ceil(rows.length / rowsPerPage);
+        let currentPage = 1;
+
+        // Hide pagination if only one page
+        if (totalPages <= 1) {
+            paginationContainer.style.display = 'none';
+            return;
+        }
+
+        function displayPage(page) {
+            const start = (page - 1) * rowsPerPage;
+            const end = start + rowsPerPage;
+
+            // Hide all rows
+            rows.forEach(row => row.style.display = 'none');
+
+            // Show only current page rows
+            for (let i = start; i < end && i < rows.length; i++) {
+                rows[i].style.display = '';
+            }
+
+            // Update pagination info
+            const showing = Math.min(end, rows.length);
+            paginationInfo.textContent = `Showing ${start + 1}-${showing} of ${rows.length}`;
+
+            // Update pagination controls
+            renderPagination();
+        }
+
+        function renderPagination() {
+            paginationControls.innerHTML = '';
+
+            // Previous button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
+            prevLi.innerHTML = `<a class="page-link" href="#" aria-label="Previous"><span aria-hidden="true">&laquo;</span></a>`;
+            if (currentPage > 1) {
+                prevLi.querySelector('a').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    currentPage--;
+                    displayPage(currentPage);
+                });
+            }
+            paginationControls.appendChild(prevLi);
+
+            // Page numbers
+            for (let i = 1; i <= totalPages; i++) {
+                // Show first, last, current, and adjacent pages
+                if (i === 1 || i === totalPages || (i >= currentPage - 1 && i <= currentPage + 1)) {
+                    const li = document.createElement('li');
+                    li.className = `page-item ${i === currentPage ? 'active' : ''}`;
+                    li.innerHTML = `<a class="page-link" href="#">${i}</a>`;
+
+                    if (i !== currentPage) {
+                        li.querySelector('a').addEventListener('click', (e) => {
+                            e.preventDefault();
+                            currentPage = i;
+                            displayPage(currentPage);
+                        });
+                    }
+
+                    paginationControls.appendChild(li);
+                } else if (i === currentPage - 2 || i === currentPage + 2) {
+                    // Add ellipsis
+                    const li = document.createElement('li');
+                    li.className = 'page-item disabled';
+                    li.innerHTML = '<span class="page-link">...</span>';
+                    paginationControls.appendChild(li);
+                }
+            }
+
+            // Next button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
+            nextLi.innerHTML = `<a class="page-link" href="#" aria-label="Next"><span aria-hidden="true">&raquo;</span></a>`;
+            if (currentPage < totalPages) {
+                nextLi.querySelector('a').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    currentPage++;
+                    displayPage(currentPage);
+                });
+            }
+            paginationControls.appendChild(nextLi);
+        }
+
+        // Initialize pagination
+        displayPage(1);
+    });
+</script>
 {% endblock %}

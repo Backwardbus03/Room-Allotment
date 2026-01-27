@@ -1,25 +1,63 @@
-from flask import Flask, render_template, request, session, redirect, url_for, flash
+from flask import Flask, render_template, request, session, redirect, url_for, flash, jsonify
 import pandas as pd
 import scheduler
 import json
 import os
 from functools import wraps
+from functools import wraps
+from dotenv import load_dotenv
+load_dotenv()
 from config import Config
 import db
 import extract_pdf
+import extract_csv
 import io
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 from flask import send_file
+import mailer
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Ensure data directory exists
 if not os.path.exists(app.config['UPLOAD_FOLDER']):
     os.makedirs(app.config['UPLOAD_FOLDER'])
+
+# Ensure Schema Migration
+try:
+    db.migrate_schema()
+except Exception as e:
+    print(f"Startup DB Migration Warning: {e}")
+
+# Duplicate detection helper
+def remove_duplicate_sessions(sessions):
+    """
+    Remove duplicate sessions based on date, time, subject, and department.
+    Keep the first occurrence of each unique session.
+    
+    A session is considered duplicate if it has the same:
+    - date, start_time, end_time, subject (case-insensitive), department
+    """
+    seen = set()
+    unique_sessions = []
+    
+    for session in sessions:
+        # Create a unique key for this session
+        key = (
+            session.get('date', ''),
+            session.get('start_time', ''),
+            session.get('end_time', ''),
+            session.get('subject', '').strip().upper(),
+            session.get('department', '').strip().upper()
+        )
+        
+        if key not in seen:
+            seen.add(key)
+            unique_sessions.append(session)
+    
+    return unique_sessions
 
 # --- Helpers & Decorators ---
 
@@ -214,6 +252,25 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+@app.route('/api/get_swap_candidates', methods=['POST'])
+@login_required
+def get_swap_candidates_route():
+    data = request.json
+    exam_name = data.get('exam_name')
+    date = data.get('date')
+    time = data.get('time')
+    supervisor_name = session.get('user_identifier', session.get('user_name'))
+    
+    if not all([exam_name, date, time]):
+        return json.dumps({'error': 'Missing data'}), 400
+        
+    schedule_data = db.get_full_schedule(exam_name)
+    if not schedule_data:
+        return json.dumps({'error': 'Schedule not found'}), 404
+        
+    candidates = find_swap_candidates(schedule_data, date, time, supervisor_name)
+    return json.dumps(candidates)
+
 # --- Routes ---
 
 @app.route('/')
@@ -240,17 +297,21 @@ def login():
                 flash("Invalid Admin Password")
         
         elif role == 'supervisor':
-            name = request.form.get('name').strip()
+            email = request.form.get('email').strip().lower()
             password = request.form.get('password')
             
             # Verify via DB
             try:
-                if db.verify_supervisor(name, password):
+                success, name = db.verify_supervisor(email, password)
+                if success:
                     session['user_role'] = 'supervisor'
-                    session['user_name'] = name
+                    session['user_name'] = name 
+                    # Use Name (Email) for schedule matching
+                    session['user_identifier'] = f"{name} ({email})" 
+                    session['user_email'] = email
                     return redirect(url_for('supervisor_dashboard'))
                 else:
-                    flash("Invalid Supervisor Name or Password.")
+                    flash("Invalid Supervisor Email or Password.")
             except Exception as e:
                 flash(f"Error accessing database: {e}")
                 
@@ -258,23 +319,24 @@ def login():
 
 @app.route('/reset_password', methods=['POST'])
 def reset_password():
-    name = request.form.get('name').strip()
+    email = request.form.get('email').strip()
     old_password = request.form.get('old_password')
     new_password = request.form.get('new_password')
     
-    if not name or not old_password or not new_password:
+    if not email or not old_password or not new_password:
         flash("All fields are required.")
         return redirect(url_for('login'))
         
     # Verify Old Password
-    if db.verify_supervisor(name, old_password):
+    success, _ = db.verify_supervisor(email, old_password)
+    if success:
         # Update to New Password
-        if db.update_supervisor_password(name, new_password):
+        if db.update_supervisor_password(email, new_password):
             flash("Password updated successfully. Please login.")
         else:
             flash("Error updating password. Please try again.")
     else:
-        flash("Invalid Name or Old Password.")
+        flash("Invalid Email or Old Password.")
         
     return redirect(url_for('login'))
 
@@ -296,10 +358,16 @@ def admin_dashboard():
     
     schedule_html = None
     sorted_duties = None
+    allocation_errors = []
     
     if selected_exam:
         # Fetch full schedule
         schedule_data = db.get_full_schedule(selected_exam)
+        
+        # Fetch snapshot for errors
+        snapshot = db.get_schedule_snapshot(selected_exam)
+        if snapshot:
+            allocation_errors = snapshot.get('allocation_errors', [])
         
         if schedule_data:
             # Reconstruct the view
@@ -319,7 +387,26 @@ def admin_dashboard():
                         seen_assignments.add(key)
             
             # Legacy sort for display
-            sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+            sorted_duties_raw = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+            
+            # Post-process to split Name (Email)
+            sorted_duties = []
+            import re
+            for name_email_str, count in sorted_duties_raw:
+                # Try to parse "Name (email)"
+                match = re.search(r"^(.*?)\s*\((.*?)\)$", name_email_str)
+                if match:
+                    name_display = match.group(1).strip()
+                    email_display = match.group(2).strip()
+                else:
+                    name_display = name_email_str
+                    email_display = ""
+                    
+                sorted_duties.append({
+                    'name': name_display,
+                    'email': email_display,
+                    'count': count
+                })
             
             # Separate Main Allocations vs Backups/Relievers
             main_allocations = []
@@ -383,6 +470,7 @@ def admin_dashboard():
                                    backup_allocations=backup_allocations,
                                    exam_name=selected_exam,
                                    issues=issues,
+                                   allocation_errors=allocation_errors,
                                    is_history=True)
                                    
     return render_template('index.html', exams=exams)
@@ -391,88 +479,381 @@ def admin_dashboard():
 @admin_required
 def configure():
     try:
+        # Check if files are present
         if 'blocks_file' not in request.files or 'supervisors_file' not in request.files:
-            return "Error: Please upload both Excel files."
+            flash("Please upload both Excel files (Blocks/Rooms and Supervisors).", "danger")
+            return redirect(url_for('admin_dashboard'))
             
         blocks_file = request.files['blocks_file']
         supervisors_file = request.files['supervisors_file']
         
-        # Read Rooms
-        df_rooms = pd.read_excel(blocks_file)
-        rooms = []
-        # Format for DB: list of dicts {'name': ..., 'capacity': ...}
-        # Assuming col 0 is Name, col 1 is Capacity
-        for index, row in df_rooms.iterrows():
-            rooms.append({
-                'name': str(row.iloc[0]),
-                'capacity': int(row.iloc[1])
-            })
-            
-        # Read Supervisors
-        df_supervisors = pd.read_excel(supervisors_file)
+        # Check if files were actually selected
+        if not blocks_file.filename or not supervisors_file.filename:
+            flash("Please select both Excel files before proceeding.", "danger")
+            return redirect(url_for('admin_dashboard'))
         
-        # Process Supervisors List
-        supervisors_db_data = []
-        supervisors_names_only = []
+        # Validate file extensions
+        allowed_extensions = {'.xlsx', '.xls'}
+        blocks_ext = os.path.splitext(blocks_file.filename)[1].lower()
+        supervisors_ext = os.path.splitext(supervisors_file.filename)[1].lower()
         
-        # Check if 'Password' column exists, else default
-        has_password = 'Password' in df_supervisors.columns
+        if blocks_ext not in allowed_extensions:
+            flash(f"Blocks/Rooms file must be an Excel file (.xlsx or .xls). Got: {blocks_ext}", "danger")
+            return redirect(url_for('admin_dashboard'))
         
-        # Assuming Name is Col 0
-        for index, row in df_supervisors.iterrows():
-            name = str(row.iloc[0]).strip()
-            if not name or name.lower() == 'nan': continue
+        if supervisors_ext not in allowed_extensions:
+            flash(f"Supervisors file must be an Excel file (.xlsx or .xls). Got: {supervisors_ext}", "danger")
+            return redirect(url_for('admin_dashboard'))
+        
+        # Read Rooms file with validation
+        try:
+            df_rooms = pd.read_excel(blocks_file)
             
-            password = '123456'
-            if has_password:
-                val = row['Password']
-                if pd.notna(val):
-                    password = str(val)
+            # Check if file is empty
+            if df_rooms.empty:
+                flash("Blocks/Rooms Excel file is empty. Please provide room data.", "danger")
+                return redirect(url_for('admin_dashboard'))
             
-            supervisors_db_data.append({'name': name, 'password': password})
-            supervisors_names_only.append(name)
+            # Check if file has at least 2 columns
+            if len(df_rooms.columns) < 2:
+                flash("Blocks/Rooms file must have at least 2 columns (Room No and Capacity).", "danger")
+                return redirect(url_for('admin_dashboard'))
+            
+            # Try to parse rooms
+            rooms = []
+            for index, row in df_rooms.iterrows():
+                try:
+                    room_name = str(row.iloc[0])
+                    capacity_val = row.iloc[1]
+                    
+                    # Validate room name
+                    if not room_name or room_name.lower() == 'nan':
+                        continue
+                    
+                    # Validate capacity is numeric
+                    capacity = int(float(capacity_val))
+                    
+                    rooms.append({
+                        'name': room_name,
+                        'capacity': capacity
+                    })
+                except (ValueError, TypeError) as e:
+                    flash(f"Invalid data in Blocks/Rooms file at row {index + 2}. Capacity must be numeric.", "danger")
+                    return redirect(url_for('admin_dashboard'))
+            
+            # Check if we got any valid rooms
+            if not rooms:
+                flash("No valid rooms found in the Blocks/Rooms file. Please check the file format.", "danger")
+                return redirect(url_for('admin_dashboard'))
+                
+        except Exception as e:
+            flash(f"Error reading Blocks/Rooms file: {str(e)}", "danger")
+            return redirect(url_for('admin_dashboard'))
+        
+        # Read Supervisors file with validation
+        try:
+            df_supervisors = pd.read_excel(supervisors_file)
+            
+            # Check if file is empty
+            if df_supervisors.empty:
+                flash("Supervisors Excel file is empty. Please provide supervisor data.", "danger")
+                return redirect(url_for('admin_dashboard'))
+            
+            # Check if file has at least 1 column
+            if len(df_supervisors.columns) < 1:
+                flash("Supervisors file must have at least 1 column (Name).", "danger")
+                return redirect(url_for('admin_dashboard'))
+            
+            # Process Supervisors List
+            supervisors_db_data = [] # For UPSERT
+            
+            # Check if 'Password' column exists, else default
+            has_password = 'Password' in df_supervisors.columns
+            
+            # Normalize column names just in case
+            df_supervisors.columns = [c.strip() for c in df_supervisors.columns]
+            
+            # Assuming Name is 'Name' and Email is 'Email ids' (or column 2 and 4 fallback)
+            col_name = 'Name' if 'Name' in df_supervisors.columns else df_supervisors.columns[2]
+            col_email = 'Email ids' if 'Email ids' in df_supervisors.columns else (df_supervisors.columns[4] if len(df_supervisors.columns) > 4 else None)
+            
+            if not col_email:
+                 flash("Could not find 'Email ids' column. Please ensure format is correct.", "danger")
+                 return redirect(url_for('admin_dashboard'))
+
+            for index, row in df_supervisors.iterrows():
+                name = str(row[col_name]).strip()
+                email = str(row[col_email]).strip().lower()
+                
+                if not name or name.lower() == 'nan': 
+                    continue
+                if not email or email.lower() == 'nan':
+                     continue
+                
+                password = '123456'
+                if has_password:
+                    val = row.get('Password')
+                    if pd.notna(val):
+                        password = str(val)
+                
+                supervisors_db_data.append({'name': name, 'email': email, 'password': password})
+            
+            # Check if we got any valid supervisors
+            if not supervisors_db_data:
+                flash("No valid supervisors found in the Supervisors file. Please check the file format.", "danger")
+                return redirect(url_for('admin_dashboard'))
+                
+        except Exception as e:
+            flash(f"Error reading Supervisors file: {str(e)}", "danger")
+            return redirect(url_for('admin_dashboard'))
         
         # SAVE TO DB
+        # 1. Clear old rooms to ensure exact match with Excel
+        db.delete_all_blocks()
+        
+        # 2. Add new rooms
         db.upsert_blocks(rooms)
         db.upsert_supervisors(supervisors_db_data)
         
-        # Check for Timetable PDF
-        preloaded_sessions = []
-        if 'timetable_pdf' in request.files:
-            pdf = request.files['timetable_pdf']
-            if pdf and pdf.filename:
-                pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], 'temp_timetable.pdf')
-                pdf.save(pdf_path)
-                try:
-                    # Try Gemini first if API Key exists
-                    if os.getenv('GEMINI_API_KEY'):
-                        flash("Attempting PDF extraction with Gemini...")
-                        preloaded_sessions = extract_pdf.parse_schedule_with_gemini(pdf_path)
-                    
-                    # Fallback or if Gemini returns empty
-                    if not preloaded_sessions:
-                        if os.getenv('GEMINI_API_KEY'):
-                             flash("Gemini returned no data, falling back to local extractor.")
-                        preloaded_sessions = extract_pdf.extract_sessions_from_pdf(pdf_path)
-                    
-                    flash(f"Extracted {len(preloaded_sessions)} sessions from PDF.")
-                except Exception as ex:
-                    flash(f"Error extracting PDF: {str(ex)}")
+        flash(f"Successfully loaded {len(rooms)} rooms and {len(supervisors_db_data)} supervisors.", "success")
         
-        return render_template('configure.html', 
-                               rooms_json=json.dumps(rooms), 
-                               supervisors_json=json.dumps(supervisors_names_only),
-                               preloaded_sessions=json.dumps(preloaded_sessions))
+        # Check for Timetable File(s) (PDF, CSV, or Excel) and SAVE THEM
+        timetable_files = request.files.getlist('timetable_pdf')  # Support multiple files
+        parser_selection = request.form.get('parser_type', 'gemini')  # Save parser choice
+        
+        saved_files = []
+        if timetable_files and any(f.filename for f in timetable_files):
+            for idx, timetable_file in enumerate(timetable_files):
+                if not timetable_file.filename:
+                    continue
+                    
+                # Get original extension
+                ext = os.path.splitext(timetable_file.filename)[1].lower()
+                
+                # Validate extension
+                if ext not in ['.pdf', '.csv', '.xlsx', '.xls']:
+                    flash(f"Skipped '{timetable_file.filename}': Unsupported format {ext}", "warning")
+                    continue
+                
+                # Save with unique name (in case of multiple files)
+                if idx == 0:
+                    # First file uses standard name for backward compatibility
+                    timetable_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable{ext}')
+                else:
+                    # Additional files get numbered
+                    timetable_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable_{idx}{ext}')
+                
+                timetable_file.save(timetable_path)
+                saved_files.append(timetable_path)
+            
+            # Save parser preference and file list to session
+            session['parser_type'] = parser_selection
+            session['timetable_files'] = saved_files
+            
+            if saved_files:
+                flash(f"Uploaded {len(saved_files)} timetable file(s) successfully.", "success")
+        else:
+            # If no new files uploaded, clean up any existing temp files
+            for ext in ['.pdf', '.csv', '.xlsx', '.xls']:
+                temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable{ext}')
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                # Also clean numbered files
+                for i in range(1, 10):
+                    temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'temp_timetable_{i}{ext}')
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+        
+        # REDIRECT TO ROLE DEFINITION
+        # Fetch fresh list from DB (to get current roles/defaults)
+        full_supervisors = db.get_all_supervisors()
+        # Also fetch available published exams for template reuse
+        available_exams = db.get_available_exams(published_only=True)
+        return render_template('define_roles.html', supervisors=full_supervisors, available_exams=available_exams)
                                
     except Exception as e:
-        return f"An error occurred reading/saving files: {str(e)}"
+        flash(f"An unexpected error occurred: {str(e)}", "danger")
+        return redirect(url_for('admin_dashboard'))
+
+@app.route('/api/get_exam_template', methods=['GET'])
+@admin_required
+def get_exam_template():
+    """Fetch supervisor parameters from a previous exam for template reuse."""
+    exam_name = request.args.get('exam_name')
+    
+    if not exam_name:
+        return jsonify({'success': False, 'error': 'No exam name provided'})
+    
+    try:
+        snapshot = db.get_schedule_snapshot(exam_name)
+        
+        if not snapshot or 'supervisors' not in snapshot:
+            return jsonify({'success': False, 'error': 'No template data found'})
+        
+        # Return supervisor roles and unavailability
+        supervisors = snapshot['supervisors']
+        
+        # Filter to only include relevant fields
+        template_data = []
+        for sup in supervisors:
+            template_data.append({
+                'email': sup.get('email'),
+                'name': sup.get('name'),
+                'role': sup.get('role'),
+                'unavailable_start': sup.get('unavailable_start'),
+                'unavailable_end': sup.get('unavailable_end')
+            })
+        
+        return jsonify({
+            'success': True,
+            'supervisors': template_data
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/save_roles', methods=['POST'])
+@admin_required
+def save_roles():
+    try:
+        # 1. Collect Form Data
+        updates = []
+        # We need to loop through submitted data. Since we used loop.index0 in template...
+        # But we don't know how many rows. We can iterate request.form keys.
+        
+        # Easier strategy: We passed email as hidden field 'email_{i}'.
+        # Find all keys starting with 'email_'
+        for key in request.form:
+            if key.startswith('email_'):
+                idx = key.split('_')[1]
+                email = request.form.get(f'email_{idx}')
+                role = request.form.get(f'role_{idx}')
+                start = request.form.get(f'start_{idx}')
+                end = request.form.get(f'end_{idx}')
+                
+                # Normalize empty dates
+                if not start: start = None
+                if not end: end = None
+                
+                updates.append({
+                    'email': email,
+                    'role': role,
+                    'start': start,
+                    'end': end
+                })
+        
+        # 2. Update DB
+        if updates:
+             db.update_supervisor_details(updates)
+             flash(f"Updated roles for {len(updates)} supervisors.", "success")
+             
+        # 3. Proceed to Timetable Extraction (PDF/CSV/Excel) - MULTIPLE FILES
+        # Find all uploaded timetable files
+        upload_folder = app.config['UPLOAD_FOLDER']
+        timetable_files = []
+        
+        # Check for files from session (if multiple were uploaded)
+        if 'timetable_files' in session and session['timetable_files']:
+            timetable_files = session['timetable_files']
+        else:
+            # Fallback: auto-detect single file
+            for ext in ['.pdf', '.csv', '.xlsx', '.xls']:
+                possible_path = os.path.join(upload_folder, f'temp_timetable{ext}')
+                if os.path.exists(possible_path):
+                    timetable_files.append(possible_path)
+                    break
+        
+        all_sessions = []
+        
+        if timetable_files:
+            # Get parser selection from form (for PDFs)
+            parser_type = request.form.get('parser_type', 'gemini')
+            
+            for timetable_file in timetable_files:
+                file_ext = os.path.splitext(timetable_file)[1].lower()
+                filename = os.path.basename(timetable_file)
+                
+                try:
+                    if file_ext in ['.csv', '.xlsx', '.xls']:
+                        # CSV/Excel extraction
+                        flash(f"Extracting from {filename}...", "info")
+                        sessions = extract_csv.extract_sessions_from_csv(timetable_file)
+                        all_sessions.extend(sessions)
+                        
+                    elif file_ext == '.pdf':
+                        # PDF extraction with parser selection
+                        if parser_type == 'gemini' and os.getenv('GEMINI_API_KEY'):
+                            flash(f"Using Gemini AI parser for {filename}...", "info")
+                            sessions = extract_pdf.parse_schedule_with_gemini(timetable_file)
+                        else:
+                            flash(f"Using PDFPlumber for {filename}...", "info")
+                            sessions = extract_pdf.extract_sessions_from_pdf(timetable_file)
+                        all_sessions.extend(sessions)
+                    
+                except Exception as ex:
+                    flash(f"Error extracting {filename}: {str(ex)}", "warning")
+            
+            # DUPLICATE DETECTION AND REMOVAL
+            if all_sessions:
+                original_count = len(all_sessions)
+                all_sessions = remove_duplicate_sessions(all_sessions)
+                duplicate_count = original_count - len(all_sessions)
+                
+                if duplicate_count > 0:
+                    flash(f"Removed {duplicate_count} duplicate session(s).", "warning")
+                
+                flash(f"Total: {len(all_sessions)} unique session(s) extracted from {len(timetable_files)} file(s).", "success")
+            
+            preloaded_sessions = all_sessions
+        else:
+            flash("No timetable file found from previous step.", "warning")
+            preloaded_sessions = []
+
+        # 4. Fetch Data for configure.html
+        rooms = db.get_all_blocks()
+        full_supervisors = db.get_all_supervisors()
+        
+        # Convert supervisors to list of strings "Name (Email)" for JS compatibility
+        # Filter: Exclude HODs from the dropdown
+        supervisors_names_only = [
+            f"{s['name']} ({s['email']})" 
+            for s in full_supervisors 
+            if s.get('role') != 'HOD'
+        ]
+        
+        # Prepare constraints for frontend (Pre-filling unavailability)
+        # Format: {"Name (Email)": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}}
+        supervisor_constraints = {}
+        for s in full_supervisors:
+            if s.get('unavailable_start') and s.get('unavailable_end'):
+                key = f"{s['name']} ({s['email']})"
+                supervisor_constraints[key] = {
+                    "start": s['unavailable_start'],
+                    "end": s['unavailable_end']
+                }
+    
+        # Render with constraints
+        return render_template('configure.html',
+                               rooms_json=json.dumps(rooms),
+                               supervisors_json=json.dumps(supervisors_names_only),
+                               preloaded_sessions=json.dumps(preloaded_sessions),
+                               supervisor_constraints=json.dumps(supervisor_constraints))
+
+    except Exception as e:
+        flash(f"An unexpected error occurred saving roles: {str(e)}", "danger")
+        return redirect(url_for('admin_dashboard'))
 
 @app.route('/generate', methods=['POST'])
 @admin_required
 def generate():
     try:
         rooms = json.loads(request.form.get('rooms_json'))
-        supervisors = json.loads(request.form.get('supervisors_json'))
+        # supervisors = json.loads(request.form.get('supervisors_json')) # OLD: Strings
+        
+        # NEW: Fetch full supervisor details from DB to get Roles and Dates
+        supervisors_data = db.get_all_supervisors()
+        # Pass this list of dicts to scheduler
+        
         session_ids = request.form.getlist('session_ids')
         exam_name = request.form.get('exam_name', 'Untitled Exam')
         
@@ -537,20 +918,37 @@ def generate():
                 
                 sessions_data.append(item)
 
-        # Generate
-        result = scheduler.generate_schedule(rooms, supervisors, sessions_data)
+        # Generate (pass full objects)
+        result = scheduler.generate_schedule(rooms, supervisors_data, sessions_data)
         
         # Process & Save
         schedule_data = result['schedule']
+        unallocated_students = result.get('unallocated', [])
+        
+        # Detect Supervisor Assignment Failures
+        supervisor_failures = []
+        if schedule_data:
+            for row in schedule_data:
+                if row.get('Supervisor') == 'NOBODY AVAILABLE':
+                    msg = f"No supervisor available for {row.get('Role')} at {row.get('Block')} on {row.get('Date')} ({row.get('Time')})"
+                    supervisor_failures.append(msg)
+        
+        allocation_errors = unallocated_students + supervisor_failures
         
         # SAVE TO DB (New Snapshot method)
         if schedule_data:
             input_snapshot = {
                 'rooms': rooms,
-                'supervisors': supervisors,
-                'sessions_data': sessions_data
+                'supervisors': supervisors_data, # Save full details
+                'sessions_data': sessions_data,
+                'allocation_errors': allocation_errors
             }
-            db.save_schedule(exam_name, input_snapshot, schedule_data)
+            # Save as Draft (published=False)
+            db.save_schedule(exam_name, input_snapshot, schedule_data, published=False)
+            
+            # --- SEND EMAILS (MOVED TO MANUAL PUBLISH) ---
+            flash("Schedule saved successfully. Please review and click 'Publish' to send emails.", "success")
+
         
         # Separate Main Allocations vs Backups/Relievers
         main_allocations = []
@@ -596,7 +994,26 @@ def generate():
             schedule_html = "<p>No main allocations generated.</p>"
 
         duty_counts = result['duties']
-        sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+        sorted_duties_raw = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # Post-process to split Name (Email) - MATCHING admin_dashboard logic
+        sorted_duties = []
+        import re
+        for name_email_str, count in sorted_duties_raw:
+            # Try to parse "Name (email)"
+            match = re.search(r"^(.*?)\s*\((.*?)\)$", name_email_str)
+            if match:
+                name_display = match.group(1).strip()
+                email_display = match.group(2).strip()
+            else:
+                name_display = name_email_str
+                email_display = ""
+                
+            sorted_duties.append({
+                'name': name_display,
+                'email': email_display,
+                'count': count
+            })
         
         return render_template('result.html', 
                                duty_report=sorted_duties, 
@@ -609,11 +1026,268 @@ def generate():
     except Exception as e:
         return f"An error occurred generating schedule: {str(e)}"
 
+# --- Publish Route ---
+
+def _publish_schedule_emails(exam_name, schedule_data, supervisors_data):
+    """
+    Helper to send emails for a published schedule.
+    """
+    try:
+        # Check if emails are disabled
+        if app.config.get('DISABLE_EMAILS', False):
+            print(f"--- EMAILS DISABLED - Skipping email notifications for {exam_name} ---")
+            return 0
+        
+        print(f"--- STARTING PUBLISH EMAIL NOTIFICATIONS FOR {exam_name} ---")
+        
+        # 0. Generate Master PDF & Workload PDF for Admin
+        try:
+            admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+            workload_pdf_bytes = _generate_workload_pdf_bytes(exam_name, schedule_data)
+            
+            print(f"Generated Admin PDF: {len(admin_pdf_bytes)} bytes")
+            print(f"Generated Workload PDF: {len(workload_pdf_bytes)} bytes")
+            
+            admin_email = app.config.get('MAIL_ADMIN')
+            if admin_email:
+                print(f"Sending Admin Notification to {admin_email}")
+                mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, workload_pdf_bytes, "Published")
+            else:
+                print("MAIL_ADMIN not set, skipping Admin email.")
+        except Exception as e_admin:
+            print(f"ERROR Sending Admin Email: {e_admin}")
+        
+        # 1. Group by Supervisor
+        supervisor_schedules = {}
+        for row in schedule_data:
+            sup_name = row.get('Supervisor')
+            if sup_name and sup_name != 'NA' and sup_name != 'NOBODY AVAILABLE':
+                if sup_name not in supervisor_schedules:
+                    supervisor_schedules[sup_name] = []
+                supervisor_schedules[sup_name].append(row)
+        
+        print(f"Found {len(supervisor_schedules)} supervisors to notify.")
+                
+        # 2. Get Supervisors to find Emails
+        sup_lookup = {s['name']: s['email'] for s in supervisors_data}
+        
+        # 3. Send Emails
+        count_sent = 0
+        for sup_name, rows in supervisor_schedules.items():
+            # Extract email logic...
+            email = None
+            if "(" in sup_name and sup_name.endswith(")"):
+                parts = sup_name.rsplit('(', 1)
+                if len(parts) > 1:
+                    email = parts[1].rstrip(')').strip()
+            if not email:
+                    email = sup_lookup.get(sup_name)
+                    
+            if email:
+                try:
+                    # Generate PERSONAL PDF
+                    sup_pdf_bytes = _generate_supervisor_pdf_bytes(exam_name, sup_name, rows)
+                    print(f"Sending Supervisor Email to {sup_name} ({email}) - PDF: {len(sup_pdf_bytes)} bytes")
+                    mailer.send_schedule_notification(email, sup_name, exam_name, rows, pdf_bytes=sup_pdf_bytes)
+                    count_sent += 1
+                except Exception as e_sup:
+                        print(f"ERROR Sending Email to {sup_name}: {e_sup}")
+            else:
+                print(f"Skipping {sup_name} - No Email Found")
+
+        return count_sent
+
+    except Exception as e:
+        print(f"--- CRITICAL EMAIL ERROR: {e} ---")
+        raise e
+
+@app.route('/publish_schedule', methods=['POST'])
+@admin_required
+def publish_schedule():
+    exam_name = request.form.get('exam_name')
+    if not exam_name:
+        flash("Result missing exam name.", "danger")
+        return redirect(url_for('admin_dashboard'))
+        
+    try:
+        schedule_data = db.get_full_schedule(exam_name)
+        if not schedule_data:
+            flash("No schedule found to publish.", "warning")
+            return redirect(url_for('admin_dashboard'))
+
+        # Need supervisor data for emails
+        supervisors_data = db.get_all_supervisors()
+        
+        # 1. Publish in DB
+        db.publish_schedule_db(exam_name)
+        
+        # 2. Send Emails
+        count = _publish_schedule_emails(exam_name, schedule_data, supervisors_data)
+        
+        if count > 0:
+            flash(f"Schedule published! Emails sent to {count} supervisors + Admin.", "success")
+        else:
+            flash("Schedule published but no supervisor emails found/sent.", "warning")
+            
+    except Exception as e:
+        flash(f"Error publishing schedule: {str(e)}", "danger")
+        
+    return redirect(url_for('admin_dashboard', exam_name=exam_name))
+    
+# --- PDF Helpers ---
+
+def _generate_timetable_pdf_bytes(exam_name, schedule_data):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+    styles = getSampleStyleSheet()
+    
+    # Title
+    title_style = styles['Title']
+    title_style.fontSize = 16
+    title_style.textColor = colors.HexColor("#1e3a8a")
+    elements = [Paragraph(f"MASTER TIMETABLE - {exam_name}", title_style)]
+    
+    # Data Processing
+    aggregated_rows = aggregate_schedule_rows(schedule_data)
+    
+    data = [["Date", "Time", "Block", "Supervisor", "Role", "Subject"]]
+    
+    cell_style = styles['BodyText']
+    cell_style.fontSize = 9
+    cell_style.leading = 11
+    
+    for row in aggregated_rows:
+        subj_para = Paragraph(row.get('Subject', ''), cell_style)
+        sup_para = Paragraph(row.get('Supervisor', ''), cell_style)
+        
+        data.append([
+            row.get('Date', ''),
+            row.get('Time', ''),
+            row.get('Block', ''),
+            sup_para,
+            row.get('Role', '').replace(' SUPERVISOR', ''),
+            subj_para
+        ])
+    
+    # Table Styling
+    # Widths: Date(90), Time(90), Block(70), Supervisor(190), Role(80), Subject(250)
+    table = Table(data, colWidths=[90, 90, 70, 190, 80, 250], repeatRows=1)
+    
+    style = TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e40af")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('ALIGN', (3,1), (3,-1), 'LEFT'),
+        ('ALIGN', (5,1), (5,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f3f4f6")])
+    ])
+    
+    table.setStyle(style)
+    elements.append(table)
+    
+    doc.build(elements)
+
+    return buffer.getvalue()
+
+def _generate_workload_pdf_bytes(exam_name, schedule_data):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    
+    elements = []
+    title_text = f"SUPERVISOR WORKLOAD REPORT - {exam_name}"
+    elements.append(Paragraph(title_text, styles['Title']))
+    
+    # 1. Calculate Counts
+    duty_counts = {}
+    seen_assignments = set()
+    for row in schedule_data:
+        sup = row.get('Supervisor', 'Unknown')
+        if sup != 'NA' and sup != 'NOBODY AVAILABLE' and sup:
+            key = (sup, row.get('Date'), row.get('Time'), row.get('Block'))
+            if key not in seen_assignments:
+                duty_counts[sup] = duty_counts.get(sup, 0) + 1
+                seen_assignments.add(key)
+    
+    sorted_duties = sorted(duty_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    # 2. Build Table Data
+    data = [["Supervisor Name", "Total Duties"]]
+    for name, count in sorted_duties:
+        data.append([name, str(count)])
+        
+    table = Table(data, colWidths=[350, 100])
+    table.setStyle(TableStyle([
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
+            ('ALIGN', (0,1), (0,-1), 'LEFT'),
+            ('LEFTPADDING', (0,1), (0,-1), 15),
+            ('ALIGN', (1,1), (1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e40af")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f3f4f6")])
+    ]))
+    
+    elements.append(table)
+    doc.build(elements)
+    return buffer.getvalue()
+
+def _generate_supervisor_pdf_bytes(exam_name, supervisor_name, my_duties):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    
+    elements = []
+    elements.append(Paragraph(f"DUTY SCHEDULE - {supervisor_name}", styles['Title']))
+    elements.append(Paragraph(f"Exam: {exam_name}", styles['Heading2']))
+    elements.append(Paragraph("<br/>", styles['Normal']))
+    
+    data = [["Date", "Time", "Block", "Role", "Subject"]]
+    cell_style = styles['BodyText']
+    cell_style.fontSize = 10
+    
+    for row in my_duties:
+        subj_para = Paragraph(row.get('Subject', '-'), cell_style)
+        data.append([
+            row.get('Date', row.get('Day', '')),
+            row.get('Time', row.get('Session', '')),
+            row.get('Block', ''),
+            row.get('Role', '').replace(' SUPERVISOR', ''),
+            subj_para
+        ])
+        
+    table = Table(data, colWidths=[80, 80, 60, 80, 150])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4f46e5")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 10),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (4,1), (4,-1), 'LEFT'),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor("#f9fafb")])
+    ]))
+    
+    elements.append(table)
+    doc.build(elements)
+    return buffer.getvalue()
+
 @app.route('/api/export-pdf', methods=['GET'])
 @admin_required
 def export_pdf():
     # Fetch data
     selected_exam = request.args.get('exam_name')
+    export_type = request.args.get('type', 'timetable') # 'timetable' or 'workload'
+    
     if not selected_exam:
         return "Error: Exam Name required.", 400
         
@@ -621,60 +1295,18 @@ def export_pdf():
     if not results:
         return "Error: No data found for this exam.", 400
 
-    # Aggregate rows to match dashboard view (combines subjects/counts)
-    results = aggregate_schedule_rows(results)
-
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    title_text = f"VIT EXAM CELL - GLOBAL MASTER DUTY LIST - {selected_exam}"
-    elements.append(Paragraph(title_text, styles['Title']))
-    
-    # Headers
-    # Removed Count as requested
-    data = [["Date", "Slot", "Room", "Supervisor", "Role", "Subject"]]
-    
-    # Create a custom style for the table cells to handle wrapping
-    cell_style = styles['BodyText']
-    cell_style.fontSize = 9
-    cell_style.leading = 11
-
-    for row in results:
-        # Wrap Subject in Paragraph for auto-newline
-        subj_text = row.get('Subject', '')
-        subj_para = Paragraph(subj_text, cell_style)
+    if export_type == 'workload':
+        # --- WORKLOAD REPORT ---
+        pdf_bytes = _generate_workload_pdf_bytes(selected_exam, results)
+        buffer = io.BytesIO(pdf_bytes)
+        filename = f"{selected_exam.replace(' ', '_')}_Workload_Report.pdf"
         
-        data.append([
-            row.get('Date', ''),
-            row.get('Time', ''),
-            row.get('Block', ''),
-            Paragraph(row.get('Supervisor', ''), cell_style), # Wrap supervisor too just in case
-            row.get('Role', '').replace(' SUPERVISOR', ''),
-            subj_para
-        ])
+    else:
+        # --- DETAILED TIMETABLE (Use Helper) ---
+        pdf_bytes = _generate_timetable_pdf_bytes(selected_exam, results)
+        buffer = io.BytesIO(pdf_bytes)
+        filename = f"{selected_exam.replace(' ', '_')}_Timetable.pdf"
 
-    # Adjusted widths to fill A4 Landscape (~800pt usable)
-    # Total: 90+90+60+150+80+300 = 770
-    table = Table(data, colWidths=[90, 90, 60, 150, 80, 300])
-    
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#002d62")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('FONTSIZE', (0,0), (-1,-1), 9),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (3,1), (3,-1), 'LEFT'), 
-        ('ALIGN', (5,1), (5,-1), 'LEFT'),
-    ]))
-    
-    elements.append(table)
-    doc.build(elements)
-    buffer.seek(0)
-    
-    filename = f"{selected_exam.replace(' ', '_')}_Duty_List.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
 
 @app.route('/resolve_issue', methods=['POST'])
@@ -682,6 +1314,54 @@ def export_pdf():
 def resolve_issue():
     issue_id = request.form.get('issue_id')
     exam_name = request.form.get('exam_name')
+    action = request.form.get('action') # 'accept' or 'reject'
+    rejection_reason = request.form.get('rejection_reason')
+
+    if not issue_id or not exam_name:
+         flash("Missing issue ID or exam name.")
+         return redirect(url_for('admin_dashboard', exam_name=exam_name))
+
+    if action == 'reject':
+        if not rejection_reason:
+            flash("Rejection reason is required.")
+            return redirect(url_for('admin_dashboard', exam_name=exam_name))
+            
+        if db.resolve_issue(issue_id, status='REJECTED', rejection_reason=rejection_reason):
+            try:
+                # 1. Identify Supervisor
+                target_sup = request.form.get('target_supervisor')
+                
+                if target_sup:
+                    # 2. Get Email (Extract from "Name (Email)" or Lookup)
+                    email = None
+                    if "(" in target_sup and target_sup.endswith(")"):
+                         parts = target_sup.rsplit('(', 1)
+                         if len(parts) > 1:
+                             email = parts[1].rstrip(')').strip()
+                    
+                    if not email:
+                        # Fallback
+                        all_sups = db.get_all_supervisors()
+                        sup_lookup = {s['name']: s['email'] for s in all_sups}
+                        email = sup_lookup.get(target_sup)
+                    
+                    if email:
+                        mailer.send_swap_rejection(email, target_sup, exam_name, rejection_reason)
+                        flash(f"Rejection email sent to {target_sup}.", "info")
+                    else:
+                         flash(f"Could not find email for {target_sup} to satisfy notification.", "warning")
+                else:
+                    flash("Supervisor name missing, could not send email.", "warning")
+                    
+            except Exception as e_mail:
+                flash(f"Error sending rejection email: {e_mail}", "warning")
+                
+            flash("Issue rejected successfully.")
+        else:
+            flash("Error rejecting issue.")
+        return redirect(url_for('admin_dashboard', exam_name=exam_name))
+    
+    # If Accept, proceed with swap logic
     
     # Original (Target) details
     supervisor_A = request.form.get('target_supervisor')
@@ -698,7 +1378,7 @@ def resolve_issue():
     date_B = request.form.get('candidate_date')
     time_B = request.form.get('candidate_time')
     
-    if not all([issue_id, exam_name, supervisor_A, date_A, time_A, supervisor_B]):
+    if not all([supervisor_A, date_A, time_A, supervisor_B]):
         flash("Missing information to resolve issue.")
         return redirect(url_for('admin_dashboard', exam_name=exam_name))
         
@@ -741,7 +1421,53 @@ def resolve_issue():
             
     # Save
     if db.update_schedule(exam_name, schedule_data):
-        db.resolve_issue(issue_id)
+        db.resolve_issue(issue_id, status='RESOLVED')
+        
+        # --- EMAIL NOTIFICATION (ACCEPT) ---
+        try:
+            flash("Swap successful. Sending emails...", "info")
+            # 1. Get Emails
+            all_sups = db.get_all_supervisors()
+            sup_lookup = {s['name']: s['email'] for s in all_sups}
+            
+            def get_email_safe(identifier, lookup):
+                if not identifier: return None
+                if "(" in identifier and identifier.endswith(")"):
+                    parts = identifier.rsplit('(', 1)
+                    if len(parts) > 1:
+                        return parts[1].rstrip(')').strip()
+                return lookup.get(identifier)
+
+            email_A = get_email_safe(supervisor_A, sup_lookup)
+            email_B = get_email_safe(supervisor_B, sup_lookup)
+            
+            # 2. Get New Schedules (Filter from the `schedule_data` we just updated!)
+            sched_A = [r for r in schedule_data if r['Supervisor'] == supervisor_A]
+            sched_B = [r for r in schedule_data if r['Supervisor'] == supervisor_B]
+            
+            # 3. Generate PDFs for Supervisors
+            pdf_A_bytes = _generate_supervisor_pdf_bytes(exam_name, supervisor_A, sched_A)
+            pdf_B_bytes = _generate_supervisor_pdf_bytes(exam_name, supervisor_B, sched_B)
+
+            # 4. Generate PDFs for Admin (Updated Master + Workload)
+            admin_pdf_bytes = _generate_timetable_pdf_bytes(exam_name, schedule_data)
+            workload_pdf_bytes = _generate_workload_pdf_bytes(exam_name, schedule_data)
+            
+            # 5. Send to Supervisors
+            if email_A and email_B:
+                 mailer.send_swap_acceptance(email_A, supervisor_A, email_B, supervisor_B, exam_name, sched_A, sched_B, pdf_A_bytes, pdf_B_bytes)
+                 flash("Emails sent to both supervisors.", "success")
+            else:
+                 flash("Could not find emails for one or both supervisors.", "warning")
+            
+            # 6. Send to Admin
+            admin_email = app.config.get('MAIL_ADMIN')
+            if admin_email:
+                mailer.send_admin_schedule_notification(admin_email, exam_name, admin_pdf_bytes, workload_pdf_bytes, "Updated (Swap Accepted)")
+            
+        except Exception as e_mail:
+            print(f"Error sending acceptance emails: {e_mail}")
+            flash(f"Error sending acceptance emails: {str(e_mail)}", "warning")
         flash(f"Swap successful. {supervisor_A} and {supervisor_B} swapped.")
     else:
         flash("Error saving updated schedule.")
@@ -763,76 +1489,89 @@ def export_supervisor_pdf():
     if not my_schedule:
         return "Error: No duties found for this exam.", 400
 
-    buffer = io.BytesIO()
-    # Portrait might be better for single person, but keeping Landscape for consistency if needed. 
-    # Let's use Portrait for personal schedule
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    elements.append(Paragraph(f"DUTY SCHEDULE - {name.upper()}", styles['Title']))
-    elements.append(Paragraph(f"Exam: {selected_exam}", styles['Heading2']))
-    
-    # Headers
-    data = [["Date", "Time", "Block", "Role", "Subject"]]
-    
-    cell_style = styles['BodyText']
-    cell_style.fontSize = 10
-    
-    for row in my_schedule:
-        subj_para = Paragraph(row.get('Subject', '-'), cell_style)
-        
-        data.append([
-            row.get('Date', row.get('Day', '')),
-            row.get('Time', row.get('Session', '')),
-            row.get('Block', ''),
-            row.get('Role', '').replace(' SUPERVISOR', ''),
-            subj_para
-        ])
-
-    # A4 Portrait Width ~ 595pt - margins -> ~450pt usable?
-    # ReportLab default margins are ~72pt each side? 
-    # Let's assume ~450pt safe width. 
-    # [80, 80, 60, 80, 150] = 450
-    table = Table(data, colWidths=[80, 80, 60, 80, 150])
-    
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#4f46e5")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('FONTSIZE', (0,0), (-1,-1), 10),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (4,1), (4,-1), 'LEFT'),
-    ]))
-    
-    elements.append(table)
-    doc.build(elements)
-    buffer.seek(0)
+    pdf_bytes = _generate_supervisor_pdf_bytes(selected_exam, name, my_schedule)
+    buffer = io.BytesIO(pdf_bytes)
     
     filename = f"{name.replace(' ', '_')}_{selected_exam.replace(' ', '_')}_Schedule.pdf"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+
+@app.route('/api/test-email', methods=['GET', 'POST'])
+@admin_required
+def test_email_route():
+    recipient = request.args.get('email') or app.config['MAIL_DEFAULT_SENDER']
+    if not recipient:
+        return "No recipient email configured. Check MAIL_DEFAULT_SENDER or pass ?email=..."
+    
+    # Debug Info
+    username = app.config.get('MAIL_USERNAME', 'Not Set')
+    password = app.config.get('MAIL_PASSWORD', 'Not Set')
+    server = app.config.get('MAIL_SERVER', 'Not Set')
+    
+    masked_pw = f"{password[:2]}...{password[-2:]} (Len: {len(password)})" if password and len(str(password)) > 4 else "Too Short/None"
+    debug_info = f"""
+    <div style="background:#f0f0f0; padding:10px; margin-bottom:10px; border:1px solid #ccc;">
+        <strong>Loaded Config:</strong><br>
+        Server: {server}<br>
+        Username: {username}<br>
+        Password: {masked_pw}<br>
+    </div>
+    """
+    
+    success, msg = mailer.test_email_connection(app, recipient)
+    
+    if success:
+        return f"{debug_info}<h3 style='color:green'>Success</h3><p>{msg}</p><p>Check inbox for {recipient}</p>"
+    else:
+        return f"{debug_info}<h3 style='color:red'>Failed</h3><p>Error: {msg}</p><p>Check your .env file for spaces or quotes around values.</p>"
 
 # --- Supervisor Routes ---
 
 @app.route('/supervisor')
 @login_required
 def supervisor_dashboard():
-    name = session.get('user_name')
+    # Use user_identifier (Name (Email)) for finding duties
+    user_identifier = session.get('user_identifier', session.get('user_name'))
+    user_name_simple = session.get('user_name') # Just name for display
     
-    # 1. Get List of Exams
-    available_exams = db.get_available_exams()
+    # 1. Fetch available exams that have schedules
+    # Supervisors see ONLY published exams
+    available_exams = db.get_available_exams(published_only=True)
     
-    # 2. Check if specific exam selected
+    # 2. Check if a specific exam is selected OR default to latest
     selected_exam = request.args.get('exam_name')
-    
+    if not selected_exam and available_exams:
+        selected_exam = available_exams[0]['name']
+        
     my_schedule = []
+    pending_issues = {} # Dict: Key -> Status String
     
     try:
         if selected_exam:
-            raw_sched = db.get_schedule_for_supervisor(selected_exam, name)
+            # Fetch my duties using Identifier
+            # Note: get_schedule_for_supervisor might need simple name or identifier depending on how it was saved
+            # In login we set identifier = Name (Email). In configure we saved Name (Email).
+            # So passing identifier is correct.
+            raw_sched = db.get_schedule_for_supervisor(selected_exam, user_identifier)
             aggregated = aggregate_schedule_rows(raw_sched)
             my_schedule = calculate_row_spans(aggregated)
+            
+            # Fetch my issues history
+            issues_history = db.get_supervisor_issues_history(selected_exam, user_identifier)
+            
+            for issue in issues_history:
+                # Key: (Date, Time, Block) - Normalize strings
+                i_date = issue['date'].strip() if issue['date'] else ''
+                i_time = issue['time'].strip() if issue['time'] else ''
+                i_block = issue['block'].strip() if issue['block'] else ''
+                
+                key = (i_date, i_time, i_block)
+                
+                if key not in pending_issues:
+                    if issue['status'] == 'OPEN':
+                        pending_issues[key] = 'PENDING'
+                    elif issue['status'] == 'REJECTED':
+                        pending_issues[key] = f"REJECTED: {issue.get('rejection_reason', 'No reason given')}"
+            
     except Exception as e:
         flash(f"Error loading schedule: {e}")
             
@@ -840,25 +1579,54 @@ def supervisor_dashboard():
                            exams=available_exams, 
                            selected_exam=selected_exam, 
                            schedule=my_schedule, 
-                           name=name)
-
+                           name=user_name_simple,
+                           pending_issues=pending_issues)
+                           
 @app.route('/report_issue', methods=['POST'])
 @login_required
-def report_issue():
+def report_issue_route():
     exam_name = request.form.get('exam_name')
     date = request.form.get('date')
     time = request.form.get('time')
     block = request.form.get('block')
     reason = request.form.get('reason')
-    supervisor_name = session.get('user_name')
     
-    if not all([exam_name, date, time, block, supervisor_name]):
-        flash("Missing information for reporting issue.")
-        return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
+    # Optional swap selection
+    candidate_supervisor = request.form.get('candidate_supervisor')
+    candidate_date = request.form.get('candidate_date')
+    candidate_time = request.form.get('candidate_time')
+    candidate_block = request.form.get('candidate_block')
+    swap_type = request.form.get('swap_type')
+    
+    candidate_data = None
+    if candidate_supervisor:
+        candidate_data = {
+            'candidate_supervisor': candidate_supervisor,
+            'candidate_date': candidate_date,
+            'candidate_time': candidate_time,
+            'candidate_block': candidate_block,
+            'swap_type': swap_type
+        }
+    
+    # Use identifier
+    supervisor_name = session.get('user_identifier', session.get('user_name'))
+    
+    success, msg = db.report_issue(exam_name, supervisor_name, date, time, block, reason, candidate_data)
+    
+    if success:
+        try:
+            admin_email = app.config.get('MAIL_ADMIN')
+            if admin_email:
+                mailer.send_issue_reported_notification(admin_email, exam_name, supervisor_name, reason)
+        except:
+            pass
+        flash("Issue reported successfully.")
+    else:
+        flash(f"Error reporting issue: {msg}")
         
-    success, msg = db.report_issue(exam_name, supervisor_name, date, time, block, reason)
-    flash(msg)
     return redirect(url_for('supervisor_dashboard', exam_name=exam_name))
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # host='0.0.0.0' makes the server accessible on your local network
+    # This allows you to access it from your phone using your computer's IP address
+    app.run(host='0.0.0.0', port=5000, debug=True)
